@@ -1,0 +1,62 @@
+/*
+ * Copyright 2020 National Library of Norway.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package serviceconnections
+
+import (
+	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
+	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
+)
+
+// RobotsEvaluatorConn holds the client for the Robots Evaluator service
+type RobotsEvaluatorConn struct {
+	opts       connectionOptions
+	clientConn *grpc.ClientConn
+	client     robotsevaluatorV1.RobotsEvaluatorClient
+}
+
+func NewRobotsEvaluatorConn(opts ...ConnectionOption) *RobotsEvaluatorConn {
+	c := &RobotsEvaluatorConn{
+		opts: defaultConnectionOptions("RobotsEvaluator"),
+	}
+	for _, opt := range opts {
+		opt.apply(&c.opts)
+	}
+	return c
+}
+
+func (c *RobotsEvaluatorConn) Connect() error {
+	var err error
+
+	// Set up robotsEvaluatorClient
+	c.clientConn, err = c.opts.connectService()
+	if err != nil {
+		return err
+	}
+	c.client = robotsevaluatorV1.NewRobotsEvaluatorClient(c.clientConn)
+	log.Infof("Connected to robots evaluator")
+
+	return nil
+}
+
+func (c *RobotsEvaluatorConn) Close() {
+	_ = c.clientConn.Close()
+}
+
+func (c *RobotsEvaluatorConn) Client() robotsevaluatorV1.RobotsEvaluatorClient {
+	return c.client
+}
