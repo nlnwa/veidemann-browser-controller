@@ -3,6 +3,7 @@ package syncx
 import (
 	"errors"
 	log "github.com/sirupsen/logrus"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,8 +18,10 @@ type CompletionTimer struct {
 	lastCheckResult bool
 	waitTimer       *time.Timer
 	idleTimer       *time.Timer
-	doneChan        chan bool
+	idleTimeout     time.Time
+	doneChan        chan interface{}
 	started         bool
+	done            int32 // 0: not done, 1: success, 2: cancel
 }
 
 func NewCompletionTimer(maxIdleTime, maxTotalTime time.Duration, check func() bool) *CompletionTimer {
@@ -27,7 +30,7 @@ func NewCompletionTimer(maxIdleTime, maxTotalTime time.Duration, check func() bo
 		maxIdleTime:  maxIdleTime,
 		maxTotalTime: maxTotalTime,
 		check:        check,
-		doneChan:     make(chan bool),
+		doneChan:     make(chan interface{}),
 	}
 }
 
@@ -38,12 +41,14 @@ func (t *CompletionTimer) Notify() {
 
 	t.lastCheckResult = t.check()
 	if t.lastCheckResult {
-		t.doneChan <- true
+		if atomic.CompareAndSwapInt32(&t.done, 0, 1) {
+			close(t.doneChan)
+			return
+		}
 	}
 	if t.idleTimer != nil && !t.idleTimer.Stop() {
-		<-t.idleTimer.C
+		t.idleTimeout = time.Now().Add(t.maxIdleTime)
 	}
-	t.idleTimer = time.NewTimer(t.maxIdleTime)
 }
 
 func (t *CompletionTimer) WaitForCompletion() (err error) {
@@ -52,6 +57,7 @@ func (t *CompletionTimer) WaitForCompletion() (err error) {
 		return
 	}
 	t.waitTimer = time.NewTimer(t.maxTotalTime)
+	t.idleTimeout = time.Now().Add(t.maxIdleTime)
 	t.idleTimer = time.NewTimer(t.maxIdleTime)
 	t.started = true
 
@@ -69,10 +75,14 @@ func (t *CompletionTimer) WaitForCompletion() (err error) {
 			if t.lastCheckResult {
 				return
 			} else {
-				return IdleTimeout
+				if time.Now().After(t.idleTimeout) {
+					return IdleTimeout
+				} else {
+					t.idleTimer = time.NewTimer(t.idleTimeout.Sub(time.Now()))
+				}
 			}
-		case ok := <-t.doneChan:
-			if ok {
+		case <-t.doneChan:
+			if atomic.LoadInt32(&t.done) == 1 {
 				return
 			} else {
 				return Cancelled
@@ -82,5 +92,7 @@ func (t *CompletionTimer) WaitForCompletion() (err error) {
 }
 
 func (t *CompletionTimer) Cancel() {
-	t.doneChan <- false
+	if atomic.CompareAndSwapInt32(&t.done, 0, 2) {
+		close(t.doneChan)
+	}
 }

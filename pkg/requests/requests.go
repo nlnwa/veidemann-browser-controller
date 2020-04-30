@@ -117,6 +117,9 @@ func (r *requestRegistry) MatchCrawlLogs() bool {
 	for _, l := range r.requests {
 		if l.CrawlLog == nil {
 			unresolved++
+			log.Tracef("Missing crawllog for %v -- %v %v", l.RequestId, l.GotNew, l.GotComplete)
+		} else {
+			log.Tracef("found crawllog for %v -- %v %v", l.RequestId, l.GotNew, l.GotComplete)
 		}
 	}
 	if unresolved > 0 {
@@ -157,15 +160,15 @@ func (r *requestRegistry) FinalizeResponses(requestedUrl *frontier.QueuedUri) {
 			} else if rr.Initiator == "script" {
 				// Resource is loaded by a script
 				discoveryType = "X"
-			} else if rr.RedirectParent != nil { //r.CrawlLog.StatusCode >= 300 && r.CrawlLog.StatusCode < 400 {
+			} else if rr.RedirectParent != nil {
 				discoveryType = "R"
 			} else {
 				discoveryType = "E"
 			}
 
-			if rr.RedirectParent != nil {
+			if rr.RedirectParent != nil && rr.RedirectParent.CrawlLog != nil {
 				rr.CrawlLog.DiscoveryPath = rr.RedirectParent.CrawlLog.DiscoveryPath + discoveryType
-			} else if referrerRequest != nil {
+			} else if referrerRequest != nil && referrerRequest.CrawlLog != nil {
 				rr.CrawlLog.DiscoveryPath = referrerRequest.CrawlLog.DiscoveryPath + discoveryType
 			} else {
 				rr.CrawlLog.DiscoveryPath = discoveryType

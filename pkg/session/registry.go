@@ -26,49 +26,48 @@ import (
 )
 
 type SessionRegistry struct {
-	sessions []*Session
-	ctx      context.Context
-	mu       sync.Mutex
-	opts     []SessionOption
-	wg       *sync.WaitGroup
+	sessions        []*Session
+	pool            chan int
+	ctx             context.Context
+	mu              sync.Mutex
+	opts            []SessionOption
+	wg              *sync.WaitGroup
+	createdSessions int32
 }
 
 func NewSessionRegistry(ctx context.Context, maxSessions int, opts ...SessionOption) (sr *SessionRegistry) {
 	sr = &SessionRegistry{
 		sessions: make([]*Session, maxSessions),
+		pool:     make(chan int, maxSessions-1),
 		ctx:      ctx,
 		opts:     opts,
 		wg:       &sync.WaitGroup{},
+	}
+	for i := 1; i < maxSessions; i++ {
+		sr.pool <- i
 	}
 	metrics.BrowserSessions.Set(float64(maxSessions))
 	return
 }
 
 func (sr *SessionRegistry) GetNextAvailable() (sess *Session, err error) {
-	for {
-		select {
-		case <-sr.ctx.Done():
-			return nil, fmt.Errorf("cancelled")
-		default:
-			for i := 1; i < len(sr.sessions); i++ {
-				sr.mu.Lock()
-				if sr.sessions[i] == nil {
-					sr.wg.Add(1)
-					sess, err = New(i, sr.opts...)
-					sr.sessions[i] = sess
-					metrics.ActiveBrowserSessions.Set(float64(sr.CurrentSessions()))
-					sr.mu.Unlock()
-					return
-				} else {
-					sr.mu.Unlock()
-				}
-			}
-		}
+	select {
+	case <-sr.ctx.Done():
+		fmt.Printf("DONE\n")
+		return nil, fmt.Errorf("cancelled")
+	case i := <-sr.pool:
+		sr.mu.Lock()
+		defer sr.mu.Unlock()
+		sr.wg.Add(1)
+		sess, err = New(i, sr.opts...)
+		sr.sessions[i] = sess
+		metrics.ActiveBrowserSessions.Set(float64(sr.CurrentSessions()))
 	}
+	return
 }
 
-func (sr *SessionRegistry) NewDirectSession(uri, crawlExecutionId, jobExecutionId string) (*Session, error) {
-	return newDirectSession(uri, crawlExecutionId, jobExecutionId, sr.opts...)
+func (sr *SessionRegistry) NewDirectSession(ctx context.Context, uri, crawlExecutionId, jobExecutionId string) (*Session, error) {
+	return newDirectSession(ctx, uri, crawlExecutionId, jobExecutionId, sr.opts...)
 }
 
 func (sr *SessionRegistry) Get(sessId int) *Session {
@@ -85,6 +84,11 @@ func (sr *SessionRegistry) Release(sess *Session) {
 	sr.sessions[sess.Id] = nil
 	metrics.ActiveBrowserSessions.Set(float64(sr.CurrentSessions()))
 	sr.wg.Done()
+	select {
+	case <-sr.ctx.Done():
+	default:
+		sr.pool <- sess.Id
+	}
 }
 
 func (sr *SessionRegistry) MaxSessions() int {
@@ -105,6 +109,7 @@ func (sr *SessionRegistry) CloseWait(timeout time.Duration) {
 	c := make(chan struct{})
 	go func() {
 		defer close(c)
+		defer close(sr.pool)
 		sr.wg.Wait()
 	}()
 	select {
@@ -118,6 +123,7 @@ func (sr *SessionRegistry) CloseWait(timeout time.Duration) {
 		metrics.ActiveBrowserSessions.Set(0)
 		metrics.BrowserSessions.Set(0)
 		close(c)
+		close(sr.pool)
 		return
 	}
 }

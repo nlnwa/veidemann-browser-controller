@@ -13,10 +13,9 @@ import (
 	"github.com/nlnwa/veidemann-recorderproxy/serviceconnections"
 	"github.com/nlnwa/veidemann-recorderproxy/testutil"
 	"github.com/ory/dockertest"
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -30,7 +29,7 @@ var sessions *session.SessionRegistry
 var localhost = GetOutboundIP().String()
 
 func TestMain(m *testing.M) {
-	logrus.SetLevel(logrus.WarnLevel)
+	log.SetLevel(log.WarnLevel)
 
 	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
 	pool, err := dockertest.NewPool("")
@@ -49,7 +48,6 @@ func TestMain(m *testing.M) {
 		session.WithProxyPort(6666),
 		session.WithDbAdapter(dbAdapter),
 		session.WithIsAllowedByRobotsTxtFunc(func(ctx context.Context, request *robotsevaluator.IsAllowedRequest) bool {
-			fmt.Printf("ROBOTS %v, %v, %v, %v, %v\n", request.ExecutionId, request.JobExecutionId, request.CollectionRef, request.Politeness != nil, request.Uri)
 			return true
 		}),
 		session.WithWriteScreenshotFunc(func(ctx context.Context, sess *session.Session, data []byte) error {
@@ -64,7 +62,7 @@ func TestMain(m *testing.M) {
 		}),
 	)
 	apiServer := NewApiServer("", 7777, sessions)
-	apiServer.Start()
+	fmt.Printf("Start API server %v\n", apiServer.Start())
 
 	// Setup recorder proxy
 	opt := testutil.WithExternalBrowserController(serviceconnections.NewConnectionOptions("BrowserController",
@@ -77,7 +75,6 @@ func TestMain(m *testing.M) {
 	recorderProxy1 := localRecorderProxy(1, grpcServices.ClientConn, "")
 	recorderProxy2 := localRecorderProxy(2, grpcServices.ClientConn, "")
 
-	//logrus.SetLevel(logrus.InfoLevel)
 	// Run the tests
 	code := m.Run()
 
@@ -86,7 +83,6 @@ func TestMain(m *testing.M) {
 	if err := pool.Purge(browserContainer); err != nil {
 		log.Fatalf("Could not purge browserContainer: %s", err)
 	}
-
 	apiServer.Close()
 	grpcServices.Close()
 	recorderProxy0.Close()
@@ -117,13 +113,16 @@ func TestSession_Fetch(t *testing.T) {
 		name string
 		url  *frontierV1.QueuedUri
 	}{
-		{"1", &frontierV1.QueuedUri{Uri: "http://elg.no", DiscoveryPath: "L"}},
-		//{"2", &frontierV1.QueuedUri{Uri: "http://vg.no", DiscoveryPath: "L"}},
-		//{"3", &frontierV1.QueuedUri{Uri: "http://nb.no", DiscoveryPath: "L"}},
-		//{"4", &frontierV1.QueuedUri{Uri: "http://fhi.no", DiscoveryPath: "L"}},
-		//{"5", &frontierV1.QueuedUri{Uri: "http://db.no", DiscoveryPath: "L", JobExecutionId:"jid", ExecutionId:"eid"}},
-		//{"5", &frontierV1.QueuedUri{Uri: "https://goo.gl/maps/EmpIH", DiscoveryPath: "L", JobExecutionId:"jid", ExecutionId:"eid"}},
-		//{"5", &frontierV1.QueuedUri{Uri: "https://ranano.no/", DiscoveryPath: "L"}},
+		{"elg", &frontierV1.QueuedUri{Uri: "http://elg.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"vg", &frontierV1.QueuedUri{Uri: "http://vg.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"nb", &frontierV1.QueuedUri{Uri: "http://nb.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"fhi", &frontierV1.QueuedUri{Uri: "http://fhi.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"db", &frontierV1.QueuedUri{Uri: "http://db.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"maps", &frontierV1.QueuedUri{Uri: "https://goo.gl/maps/EmpIH", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"ranano", &frontierV1.QueuedUri{Uri: "https://ranano.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"cynergi", &frontierV1.QueuedUri{Uri: "https://cynergi.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"pdf1", &frontierV1.QueuedUri{Uri: "https://spaniaposten.no/spaniaposten.no/pdf/2004/54-SpaniaPosten.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"pdf2", &frontierV1.QueuedUri{Uri: "http://publikasjoner.nve.no/rapport/2015/rapport2015_89.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -140,6 +139,7 @@ func TestSession_Fetch(t *testing.T) {
 			//b, _ := json.Marshal(result)
 			//fmt.Printf("Result: %s\n", b)
 			sessions.Release(s)
+			//time.Sleep(time.Second*4)
 		})
 	}
 }
@@ -158,8 +158,8 @@ func setupDbMock() *database.DbAdapter {
 			"browserConfig": map[string]interface{}{
 				"windowWidth":         1400,
 				"windowHeight":        1280,
-				"maxInactivityTimeMs": 8000,
-				"pageLoadTimeoutMs":   30000,
+				"maxInactivityTimeMs": 5000,
+				"pageLoadTimeoutMs":   60000,
 				"scriptRef":           []map[string]interface{}{{"kind": "browserScript", "id": "script1"}},
 			},
 		},
@@ -215,7 +215,7 @@ __brzl_compileOutlinks(window).join('\\n');`,
 
 // localRecorderProxy creates a new recorderproxy which uses internal transport
 func localRecorderProxy(id int, conn *serviceconnections.Connections, nextProxyAddr string) (proxy *recorderproxy.RecorderProxy) {
-	proxy = recorderproxy.NewRecorderProxy(id, "0.0.0.0", 6666, conn, 1*time.Minute, nextProxyAddr)
+	proxy = recorderproxy.NewRecorderProxy(id, "0.0.0.0", 6666, conn, 5*time.Second, nextProxyAddr)
 	proxy.Start()
 	return
 }
@@ -235,7 +235,8 @@ func GetOutboundIP() net.IP {
 func setupBrowser(pool *dockertest.Pool) (container *dockertest.Resource, port int) {
 	var err error
 	// pulls an image, creates a container based on it and runs it
-	container, err = pool.Run("browserless/chrome", "1.29.0-puppeteer-2.1.1", []string{})
+	//container, err = pool.Run("browserless/chrome", "1.32.0-puppeteer-2.1.1", []string{"WORKSPACE_DIR", "/dev/null"})//, "DISABLE_AUTO_SET_DOWNLOAD_BEHAVIOR", "true"})
+	container, err = pool.Run("browserless/chrome", "1.33.0-puppeteer-3.0.0", []string{})
 	if err != nil {
 		log.Fatalf("Could not start browserContainer: %s", err)
 	}

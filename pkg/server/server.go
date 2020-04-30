@@ -2,16 +2,22 @@ package server
 
 import (
 	"context"
+	gerr "errors"
 	"fmt"
 	browsercontrollerV1 "github.com/nlnwa/veidemann-api-go/browsercontroller/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/errors"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/requests"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"io"
 	"net"
+	"runtime/debug"
+	"time"
 )
 
 // ApiServer is the gRPC api endpoint for the Browser Controller
@@ -41,7 +47,9 @@ func (a *ApiServer) Start() error {
 	a.ln = ln
 	a.listenAddr = ln.Addr()
 
-	var opts []grpc.ServerOption
+	opts := []grpc.ServerOption{
+		grpc.StatsHandler(&myStatsHandler{}),
+	}
 	a.grpcServer = grpc.NewServer(opts...)
 	browsercontrollerV1.RegisterBrowserControllerServer(a.grpcServer, a)
 
@@ -54,31 +62,84 @@ func (a *ApiServer) Start() error {
 
 func (a *ApiServer) Close() {
 	log.Infof("Shutting down API server")
+
+	// Set a timer to fire a hard shutdown if graceful shutdown doesn't return
+	t := time.AfterFunc(time.Minute, a.grpcServer.Stop)
+
+	// Do a graceful shutdown
 	a.grpcServer.GracefulStop()
+	t.Stop()
 }
 
 // Implements BrowserController
-func (a *ApiServer) Do(server browsercontrollerV1.BrowserController_DoServer) error {
+func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (err error) {
+	// Ensure that bugs in implementation is logged and handled
+	defer func() {
+		if r := recover(); r != nil {
+			var fetchError errors.FetchError
+			switch v := r.(type) {
+			case errors.FetchError:
+				fetchError = v
+			case error:
+				fetchError = errors.New(-5, "Runtime error", v.Error())
+			case *log.Entry:
+				fetchError = errors.New(-5, "Runtime error", v.Message)
+			default:
+				fetchError = errors.New(-5, "Runtime error", fmt.Sprintf("%s", v))
+			}
+			log.Errorf("Panic while serving proxy: %s", fetchError.Error())
+
+			// Add stacktrace to error
+			fetchError.CommonsError().Detail += "\n" + string(debug.Stack())
+			err = fetchError
+		}
+	}()
+
 	var sess *session.Session
 	var req *requests.Request
 
 	for {
-		request, err := server.Recv()
+		var recvCtx context.Context
+		if sess == nil {
+			recvCtx, _ = context.WithTimeout(stream.Context(), 10*time.Second)
+		} else {
+			recvCtx = sess.Context()
+			select {
+			case <-recvCtx.Done():
+				return status.Errorf(codes.Canceled, "Session is cancelled")
+			default:
+			}
+		}
+		request, err := Run(recvCtx, stream.Recv)
 		if err == io.EOF {
 			return nil
 		}
 		if err != nil {
-			return err
+			if err2 := Send(stream, &browsercontrollerV1.DoReply{
+				Action: &browsercontrollerV1.DoReply_Cancel{
+					Cancel: "Cancelled by browser controller",
+				},
+			}); err2 != nil {
+				return status.Errorf(codes.Canceled, "Send cancel error: %v, orig error: %v", err2, err)
+			}
+			switch {
+			case gerr.Is(err, context.DeadlineExceeded):
+				return status.Errorf(codes.DeadlineExceeded, "Deadline exceeded while waiting for proxy request: %v", err)
+			case gerr.Is(err, context.Canceled):
+				return status.Errorf(codes.Canceled, "Browser controller canceled request: %v", err)
+			default:
+				return status.Errorf(codes.Unknown, "Unknown error while waiting for proxy request: %v", err)
+			}
 		}
 
 		switch v := request.Action.(type) {
 		case *browsercontrollerV1.DoRequest_New:
 			if v.New.ProxyId == 0 {
-				sess, err = a.sessions.NewDirectSession(v.New.Uri, v.New.CrawlExecutionId, v.New.JobExecutionId)
+				sess, err = a.sessions.NewDirectSession(stream.Context(), v.New.Uri, v.New.CrawlExecutionId, v.New.JobExecutionId)
 				if err != nil {
 					return fmt.Errorf("could not create session for 0-proxy %w", err)
 				}
-				_ = server.Send(&browsercontrollerV1.DoReply{
+				if err = Send(stream, &browsercontrollerV1.DoReply{
 					Action: &browsercontrollerV1.DoReply_New{
 						New: &browsercontrollerV1.NewReply{
 							CrawlExecutionId: v.New.CrawlExecutionId,
@@ -86,37 +147,26 @@ func (a *ApiServer) Do(server browsercontrollerV1.BrowserController_DoServer) er
 							CollectionRef:    v.New.CollectionRef,
 						},
 					},
-				})
+				}); err != nil {
+					return err
+				}
 				continue
 			} else {
 				sess = a.sessions.Get(int(v.New.ProxyId))
 			}
 
 			if sess == nil {
-				switch v.New.Method {
-				case "CONNECT":
-					// No session found, this is probably a CONNECT for robots.txt
-					_ = server.Send(&browsercontrollerV1.DoReply{
-						Action: &browsercontrollerV1.DoReply_New{
-							New: &browsercontrollerV1.NewReply{
-								CrawlExecutionId: v.New.CrawlExecutionId,
-								JobExecutionId:   v.New.JobExecutionId,
-								CollectionRef:    v.New.CollectionRef,
-							},
-						},
-					})
-				default:
-					log.Infof("Cancelling Null session, proxy: %v, %v %v", v.New.ProxyId, v.New.Method, v.New.Uri)
-					_ = server.Send(&browsercontrollerV1.DoReply{
-						Action: &browsercontrollerV1.DoReply_Cancel{
-							Cancel: "Cancelled by browser controller",
-						},
-					})
+				fmt.Printf("NULL SESSION: %v %v %v\n", v.New.RequestId, v.New.Method, v.New.Uri)
+				log.Infof("Cancelling Null session, proxy: %v, %v %v", v.New.ProxyId, v.New.Method, v.New.Uri)
+				if err = Send(stream, &browsercontrollerV1.DoReply{
+					Action: &browsercontrollerV1.DoReply_Cancel{
+						Cancel: "Cancelled by browser controller",
+					},
+				}); err != nil {
+					return err
 				}
 				continue
 			}
-
-			sess.Notify()
 
 			log.Tracef("Check robots for %v, jeid: %v, ceid: %v, policy: %v",
 				v.New.Uri,
@@ -134,11 +184,13 @@ func (a *ApiServer) Do(server browsercontrollerV1.BrowserController_DoServer) er
 			}
 			if !sess.RobotsIsAllowed(context.Background(), robotsRequest) {
 				log.Debugf("URI %v was blocked by robots.txt", v.New.Uri)
-				_ = server.Send(&browsercontrollerV1.DoReply{
+				if err = Send(stream, &browsercontrollerV1.DoReply{
 					Action: &browsercontrollerV1.DoReply_Cancel{
 						Cancel: "Blocked by robots.txt",
 					},
-				})
+				}); err != nil {
+					return err
+				}
 				continue
 			}
 
@@ -154,25 +206,43 @@ func (a *ApiServer) Do(server browsercontrollerV1.BrowserController_DoServer) er
 							},
 						},
 					}
-					_ = server.Send(reply)
+					if err = Send(stream, reply); err != nil {
+						return err
+					}
 					continue
 				case "OPTIONS":
 					Url := database.NormalizeUrl(v.New.Uri)
 					req = sess.Requests.GetByUrl(Url, true)
-					req.GotNew = true
+					if req == nil {
+						log.Debugf("No new request found for %v %v %v. Has fulfilled request: %v", v.New.RequestId, v.New.Method, Url, sess.Requests.GetByUrl(Url, false) != nil)
+					} else {
+						req.GotNew = true
+					}
 
 				default:
-					log.Warnf("New request from proxy without ID: %v %v", v.New.Method, v.New.Uri)
-					_ = server.Send(&browsercontrollerV1.DoReply{
+					// The request was not intercepted. Probably from a subsystem in browser e.g. a service worker
+					// We cancel this request at the moment
+					// TODO: revisit this to see if we can do anything smarter
+					log.Debugf("New request from proxy without ID: %v %v", v.New.Method, v.New.Uri)
+					if err = Send(stream, &browsercontrollerV1.DoReply{
 						Action: &browsercontrollerV1.DoReply_Cancel{
 							Cancel: "Cancelled by browser controller",
 						},
-					})
+					}); err != nil {
+						return err
+					}
 					continue
 				}
 			} else {
 				req = sess.Requests.GetByRequestId(v.New.RequestId)
-				req.GotNew = true
+				if req == nil {
+					log.Warnf("No request found for %v", v.New.RequestId)
+				} else {
+					req.GotNew = true
+					if err := sess.Notify(req.RequestId); err != nil {
+						return err
+					}
+				}
 			}
 
 			reply := &browsercontrollerV1.NewReply{
@@ -185,24 +255,41 @@ func (a *ApiServer) Do(server browsercontrollerV1.BrowserController_DoServer) er
 				reply.ReplacementScript = replacementScript
 			}
 
-			_ = server.Send(&browsercontrollerV1.DoReply{Action: &browsercontrollerV1.DoReply_New{New: reply}})
+			if err = Send(stream, &browsercontrollerV1.DoReply{Action: &browsercontrollerV1.DoReply_New{New: reply}}); err != nil {
+				return err
+			}
 		case *browsercontrollerV1.DoRequest_Notify:
 			if sess != nil {
-				sess.Notify()
+				if req != nil {
+					if err := sess.Notify(req.RequestId); err != nil {
+						return err
+					}
+				}
 			} else {
-				log.Warnf("Notify without session: %v %v\n", v.Notify.GetActivity(), req)
+				log.Warnf("Notify without session: %v", v.Notify.GetActivity())
+				return status.Errorf(codes.Canceled, "Session is cancelled")
 			}
 		case *browsercontrollerV1.DoRequest_Completed:
+			log.Tracef("Request completed %v %v %v", v.Completed.CrawlLog.StatusCode, v.Completed.CrawlLog.Method, v.Completed.CrawlLog.RequestedUri)
 			if sess == nil || (sess.Id != 0 && req == nil) {
 				log.Infof("Missing session: %v %v %v", v.Completed.CrawlLog.WarcId, v.Completed.CrawlLog.Method, v.Completed.CrawlLog.RequestedUri)
 			}
 			if req == nil {
-				if sess.Id == 0 && !v.Completed.Cached && v.Completed.CrawlLog != nil && v.Completed.CrawlLog.WarcId != "" {
-					if err := sess.DbAdapter.WriteCrawlLog(v.Completed.CrawlLog); err != nil {
-						log.Errorf("error writing crawlLog for direct session: %v", err)
+				if sess.Id == 0 {
+					if !v.Completed.Cached && v.Completed.CrawlLog != nil && v.Completed.CrawlLog.WarcId != "" {
+						if err := sess.DbAdapter.WriteCrawlLog(v.Completed.CrawlLog); err != nil {
+							log.Errorf("error writing crawlLog for direct session: %v", err)
+						}
 					}
 				} else {
-					log.Errorf("Missing reqId for %v %v %v, Cached: %v", v.Completed.CrawlLog.Method, v.Completed.CrawlLog.StatusCode, v.Completed.CrawlLog.RequestedUri, v.Completed.Cached)
+					switch v.Completed.CrawlLog.Method {
+					case "OPTIONS":
+					case "CONNECT":
+					default:
+						log.Errorf("Missing reqId for %v %v %v, Cached: %v",
+							v.Completed.CrawlLog.Method, v.Completed.CrawlLog.StatusCode,
+							v.Completed.CrawlLog.RequestedUri, v.Completed.Cached)
+					}
 				}
 			} else {
 				req.CrawlLog = v.Completed.CrawlLog
@@ -213,12 +300,15 @@ func (a *ApiServer) Do(server browsercontrollerV1.BrowserController_DoServer) er
 					req.FromCache = true
 				}
 				req.GotComplete = true
-			}
-			if sess != nil {
-				sess.Notify()
-			} else {
-				log.Warnf("Notify without session: %v", req)
+				if err := sess.Notify(req.RequestId); err != nil {
+					return err
+				}
 			}
 		}
 	}
+}
+
+func Send(stream browsercontrollerV1.BrowserController_DoServer, reply *browsercontrollerV1.DoReply) error {
+	err := DoWithTimeout(func() error { return stream.Send(reply) }, 5*time.Second)
+	return err
 }

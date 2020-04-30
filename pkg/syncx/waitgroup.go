@@ -26,6 +26,7 @@ type WaitGroup struct {
 	counter int32
 	done    chan interface{}
 	cancel  chan interface{}
+	state   int32
 }
 
 func NewWaitGroup(ctx context.Context) *WaitGroup {
@@ -39,7 +40,7 @@ func NewWaitGroup(ctx context.Context) *WaitGroup {
 
 func (wg *WaitGroup) Add(delta int) {
 	n := atomic.AddInt32(&wg.counter, int32(delta))
-	if n == 0 {
+	if n == 0 && atomic.CompareAndSwapInt32(&wg.state, 1, 2) {
 		close(wg.done)
 	}
 }
@@ -49,6 +50,10 @@ func (wg *WaitGroup) Done() {
 }
 
 func (wg *WaitGroup) Wait() (err error) {
+	atomic.CompareAndSwapInt32(&wg.state, 0, 1)
+	if atomic.LoadInt32(&wg.counter) == 0 {
+		return nil
+	}
 	for {
 		select {
 		case <-wg.ctx.Done():

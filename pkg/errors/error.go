@@ -23,9 +23,10 @@ import (
 
 type FetchError interface {
 	CommonsError() *commonsV1.Error
+	Error() string
 }
 
-func New(code int32, msg, detail string) error {
+func New(code int32, msg, detail string) FetchError {
 	return &fetchError{err: commonsV1.Error{
 		Code:   code,
 		Msg:    msg,

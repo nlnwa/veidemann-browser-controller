@@ -24,11 +24,10 @@ import (
 )
 
 type BrowserController struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	opts     browserControllerOptions
-	sessions *session.SessionRegistry
-	//listener  net.Listener
+	ctx         context.Context
+	cancel      context.CancelFunc
+	opts        browserControllerOptions
+	sessions    *session.SessionRegistry
 	waitRunning chan struct{}
 }
 

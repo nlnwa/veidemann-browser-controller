@@ -27,6 +27,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/security"
 	"github.com/chromedp/cdproto/serviceworker"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/device"
 	"github.com/golang/protobuf/ptypes"
@@ -39,7 +40,11 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/syncx"
 	"github.com/nlnwa/whatwg-url/url"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"math"
+	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +59,7 @@ type Session struct {
 	proxyHost         string
 	proxyPort         int
 	browserWsEndpoint string
+	workspaceEndpoint string
 	UserAgent         string
 	BrowserVersion    string
 	Requests          requests.RequestRegistry
@@ -90,19 +96,27 @@ func New(sessionId int, opts ...SessionOption) (*Session, error) {
 	query.Append("--ignore-certificate-errors", "")
 	query.Append("headless", "true")
 	query.Append("timeout", strconv.Itoa(s.browserTimeout))
+	query.Append("trackingId", strconv.Itoa(s.Id))
 
 	s.browserWsEndpoint = ws.String()
+
+	work, err := url.Parse("http://" + s.browserHost + ":" + strconv.Itoa(s.browserPort) + "/workspace")
+	if err != nil {
+		return nil, err
+	}
+	s.workspaceEndpoint = work.String()
 
 	log.Debugf("New session. Id: %d, CDP endpoint: %v", s.Id, s.browserWsEndpoint)
 	return s, nil
 }
 
-func newDirectSession(uri, crawlExecutionId, jobExecutionId string, opts ...SessionOption) (*Session, error) {
+func newDirectSession(ctx context.Context, uri, crawlExecutionId, jobExecutionId string, opts ...SessionOption) (*Session, error) {
 	sess := defaultSessionOptions()
 	sess.Id = 0
 	for _, opt := range opts {
 		opt.apply(sess)
 	}
+	sess.ctx, _ = context.WithTimeout(ctx, 10*time.Second)
 
 	QUri := &frontierV1.QueuedUri{
 		Uri:            uri,
@@ -116,13 +130,56 @@ func newDirectSession(uri, crawlExecutionId, jobExecutionId string, opts ...Sess
 	return sess, nil
 }
 
-func (sess *Session) Notify() {
-	if sess.timer != nil {
-		sess.timer.Notify()
+func (sess *Session) Notify(reqId string) error {
+	if reqId == "" {
+		log.Warnf("Notify without request")
+	}
+	select {
+	case <-sess.ctx.Done():
+		return status.Errorf(codes.Canceled, "Session is canceled")
+	default:
+		if sess.timer != nil {
+			sess.timer.Notify()
+		}
+		return nil
 	}
 }
 
-func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.ConfigObject) (*RenderResult, error) {
+func (sess *Session) Context() context.Context {
+	return sess.ctx
+}
+
+func (sess *Session) Done() <-chan struct{} {
+	if sess.ctx != nil {
+		return sess.ctx.Done()
+	} else {
+		return nil
+	}
+}
+
+func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.ConfigObject) (result *RenderResult, err error) {
+	// Ensure that bugs in implementation is logged and handled
+	defer func() {
+		if r := recover(); r != nil {
+			var fetchError errors.FetchError
+			switch v := r.(type) {
+			case errors.FetchError:
+				fetchError = v
+			case error:
+				fetchError = errors.New(-5, "Runtime error", v.Error())
+			case *log.Entry:
+				fetchError = errors.New(-5, "Runtime error", v.Message)
+			default:
+				fetchError = errors.New(-5, "Runtime error", fmt.Sprintf("%s", v))
+			}
+			log.WithField("eid", QUri.ExecutionId).Errorf("Panic while fetching %v: %s", QUri.Uri, fetchError.Error())
+
+			// Add stacktrace to error
+			fetchError.CommonsError().Detail += "\n" + string(debug.Stack())
+			err = fetchError
+		}
+	}()
+
 	log.WithField("eid", QUri.ExecutionId).Infof("Start fetch of %v", QUri.Uri)
 	sess.RequestedUrl = QUri
 	sess.CrawlConfig = crawlConf.GetCrawlConfig()
@@ -141,12 +198,16 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	maxTotalTime := time.Duration(sess.BrowserConfig.PageLoadTimeoutMs) * time.Millisecond
 	maxIdleTime := time.Duration(sess.BrowserConfig.MaxInactivityTimeMs) * time.Millisecond
 
-	allocatorContext, cancel := chromedp.NewRemoteAllocator(context.Background(), sess.browserWsEndpoint)
-	defer cancel()
+	allocatorContext, allocatorCancel := chromedp.NewRemoteAllocator(context.Background(), sess.browserWsEndpoint)
+	defer allocatorCancel()
 
 	// create context
 	ctx, cancel := chromedp.NewContext(allocatorContext)
 	defer cancel()
+	sess.ctx = ctx
+	sess.frameWg = syncx.NewWaitGroup(sess.ctx)
+	sess.Requests = requests.NewRegistry(sess.ctx, sess.frameWg)
+
 	// ensure the first tab is created
 	var userAgent string
 	if err := chromedp.Run(ctx,
@@ -158,10 +219,6 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		return nil, err
 	}
 
-	sess.ctx = ctx
-
-	sess.frameWg = syncx.NewWaitGroup(sess.ctx)
-	sess.Requests = requests.NewRegistry(sess.ctx, sess.frameWg)
 	sess.initListeners()
 
 	sess.timer = syncx.NewCompletionTimer(maxIdleTime, maxTotalTime, sess.Requests.MatchCrawlLogs)
@@ -186,25 +243,27 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	if err := chromedp.Run(ctx,
 		security.SetIgnoreCertificateErrors(true),
 		network.SetCacheDisabled(true),
-		network.SetBypassServiceWorker(true),
 		serviceworker.Enable(),
-		page.SetDownloadBehavior(page.SetDownloadBehaviorBehaviorAllow).WithDownloadPath("/dev/null"),
 		chromedp.Emulate(deviceInfo),
 		fetch.Enable(),
 		network.Enable(),
 		page.Enable(),
 		network.SetCookies(sess.getCookieParams(sess.RequestedUrl)),
+		runtime.Enable(),
+		target.SetAutoAttach(true, true).WithFlatten(true),
 	); err != nil {
 		return nil, fmt.Errorf("failed initializing browser: %w", err)
 	}
-	time.Sleep(200 * time.Millisecond)
 
 	// Navigate
 	var loadCtx context.Context
 	loadCtx, sess.loadCancel = context.WithTimeout(sess.ctx, maxTotalTime)
 	fetchStart := time.Now()
 	if err := chromedp.Run(loadCtx,
-		chromedp.Navigate(sess.RequestedUrl.Uri),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_, _, _, err := page.Navigate(sess.RequestedUrl.Uri).WithTransitionType(page.TransitionTypeOther).Do(ctx)
+			return err
+		}),
 	); err != nil {
 		if err == context.Canceled && sess.Requests.InitialRequest().FromCache {
 			return nil, errors.New(-4100, "Already seen", "Initial request was found in cache. Url: "+sess.RequestedUrl.Uri)
@@ -215,6 +274,10 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		}
 	}
 
+	// Give scripts a chance to start
+	time.Sleep(1 * time.Second)
+
+	// Wait for frames to finish loading
 	err = sess.frameWg.Wait()
 	if err == syncx.Cancelled && sess.Requests.InitialRequest().FromCache {
 		return nil, errors.New(-4100, "Already seen", "Initial request was found in cache. Url: "+sess.RequestedUrl.Uri)
@@ -224,13 +287,14 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		return nil, errors.New(-4, "Http timeout", "Idle time out. Url: "+sess.RequestedUrl.Uri)
 	}
 
-	// Wait for scripts to start
-	time.Sleep(1 * time.Second)
+	// Wait for all outstanding requests to receive a response
 	err = sess.timer.WaitForCompletion()
 	if err != nil {
 		log.Warnf("Not complete: %v", err)
 	}
+
 	fetchDuration := time.Since(fetchStart)
+
 	sess.Requests.FinalizeResponses(sess.RequestedUrl)
 
 	var crawlLogCount int32
@@ -264,8 +328,8 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 				Method:        r.Method,
 			}
 			resources = append(resources, resource)
-		} else {
-			log.Warnf("Skipping resource %v %v %v, From cache %v", r.RequestId, r.Method, r.Url, r.FromCache)
+		} else if !r.FromCache {
+			log.Warnf("No crawllog for resource. Skipping %v %v %v. Got new: %v, Got complete %v", r.RequestId, r.Method, r.Url, r.GotNew, r.GotComplete)
 		}
 	})
 
@@ -277,6 +341,11 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	outlinkUrls := make([]string, len(outlinks))
 	for i, o := range outlinks {
 		outlinkUrls[i] = o.Uri
+	}
+
+	err = chromedp.Cancel(ctx)
+	if err != nil {
+		log.Warnf("Failed closing browser: %v", err)
 	}
 
 	if sess.Requests.InitialRequest() != nil && sess.Requests.InitialRequest().CrawlLog != nil {
@@ -293,12 +362,14 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		}
 		if err := sess.DbAdapter.WritePageLog(pageLog); err != nil {
 			return nil, fmt.Errorf("error writing pageLog: %w", err)
+		} else {
+			log.WithField("uri", sess.RequestedUrl.Uri).Debugf("Pagelog written")
 		}
 	} else {
 		return nil, fmt.Errorf("missing initial request: %w", err)
 	}
 
-	result := &RenderResult{
+	result = &RenderResult{
 		BytesDownloaded: bytesDownloaded,
 		UriCount:        crawlLogCount,
 		Outlinks:        outlinks,
@@ -306,7 +377,20 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		PageFetchTimeMs: fetchDuration.Milliseconds(),
 	}
 
+	sess.cleanWorkspace()
+	log.Debugf("Fetch done: %v", QUri.Uri)
 	return result, nil
+}
+
+// cleanWorkspace removes downloaded resources in browser container
+func (sess *Session) cleanWorkspace() {
+	if r, err := http.NewRequest("DELETE", sess.workspaceEndpoint+"/"+strconv.Itoa(sess.Id), nil); err != nil {
+		log.Warnf("Error creating request for cleaning up workspace: %v", err)
+	} else {
+		if _, err = http.DefaultClient.Do(r); err != nil {
+			log.Warnf("Error cleaning up workspace: %v", err)
+		}
+	}
 }
 
 func (sess *Session) getCookieParams(uri *frontierV1.QueuedUri) []*network.CookieParam {
@@ -359,7 +443,7 @@ func (sess *Session) extractCookies() []*frontierV1.Cookie {
 			return nil
 		}),
 	); err != nil {
-		panic(err)
+		log.Errorf("Could not extract cookies: %v", err)
 	}
 
 	return result
@@ -368,13 +452,13 @@ func (sess *Session) extractCookies() []*frontierV1.Cookie {
 func (sess *Session) saveScreenshot() {
 	// Skip screenshot of pages loaded from cache
 	if sess.Requests.RootRequest().FromCache {
-		log.Infof("Page with resource type %v is from cache, skipping screenshot", sess.Requests.RootRequest().ResourceType)
+		log.Debugf("Page with resource type %v is from cache, skipping screenshot", sess.Requests.RootRequest().ResourceType)
 		return
 	}
 
 	// Check if page is renderable
 	if sess.Requests.RootRequest().ResourceType != "Document" && sess.Requests.RootRequest().ResourceType != "Image" {
-		log.Infof("Page with resource type %v is not renderable, skipping screenshot", sess.Requests.RootRequest().ResourceType)
+		log.Debugf("Page with resource type %v is not renderable, skipping screenshot", sess.Requests.RootRequest().ResourceType)
 		return
 	}
 
@@ -409,7 +493,7 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 			}),
 		)
 		if err != nil {
-			log.Warnf("Error executiong script %v", errDetail)
+			log.Warnf("Error executing script: %v %v", err, errDetail)
 			continue
 		}
 		if res.Value != nil {
@@ -446,6 +530,7 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 }
 
 func (sess *Session) AbortFetch() {
+	log.Debugf("Aborting fetch")
 	if err := chromedp.Run(sess.ctx,
 		page.StopLoading(),
 	); err != nil {
