@@ -66,6 +66,7 @@ type Session struct {
 	currentLoading    int32
 	frameWg           *syncx.WaitGroup
 	loadCancel        func()
+	netActivityTimer  *syncx.CompletionTimer
 	timer             *syncx.CompletionTimer
 	RequestedUrl      *frontierV1.QueuedUri
 	CrawlConfig       *configV1.CrawlConfig
@@ -138,6 +139,9 @@ func (sess *Session) Notify(reqId string) error {
 	case <-sess.ctx.Done():
 		return status.Errorf(codes.Canceled, "Session is canceled")
 	default:
+		if sess.netActivityTimer != nil {
+			sess.netActivityTimer.Notify()
+		}
 		if sess.timer != nil {
 			sess.timer.Notify()
 		}
@@ -221,6 +225,7 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 
 	sess.initListeners()
 
+	sess.netActivityTimer = syncx.NewCompletionTimer(1*time.Second, maxTotalTime, nil)
 	sess.timer = syncx.NewCompletionTimer(maxIdleTime, maxTotalTime, sess.Requests.MatchCrawlLogs)
 
 	sess.UserAgent = sess.BrowserConfig.UserAgent
@@ -274,8 +279,8 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		}
 	}
 
-	// Give scripts a chance to start
-	time.Sleep(1 * time.Second)
+	// Give scripts a chance to start by waiting for network activity to slow down
+	_ = sess.netActivityTimer.WaitForCompletion()
 
 	// Wait for frames to finish loading
 	err = sess.frameWg.Wait()
@@ -310,7 +315,7 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 			crawlLogCount++
 			bytesDownloaded += r.CrawlLog.Size
 		} else {
-			log.Debugf("Skipping wirte of %v %v %v, From cache %v, Has CrawlLog: %v", r.RequestId, r.Method, r.Url, r.FromCache, r.CrawlLog != nil)
+			log.Debugf("Skipping write of %v %v %v, From cache %v, Has CrawlLog: %v", r.RequestId, r.Method, r.Url, r.FromCache, r.CrawlLog != nil)
 		}
 
 		if r.CrawlLog != nil {

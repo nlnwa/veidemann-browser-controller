@@ -130,10 +130,11 @@ func TestSession_Fetch(t *testing.T) {
 			if err != nil {
 				t.Error(err)
 			}
-			_, err = s.Fetch(tt.url, conf)
+			result, err := s.Fetch(tt.url, conf)
 			if err != nil {
 				t.Error(err)
 			}
+			fmt.Printf("Resource count: %v, Time: %v\n", result.UriCount, result.PageFetchTimeMs)
 			//result, err := s.Fetch(tt.url, conf)
 			//fmt.Printf("Err: %v\n", err)
 			//b, _ := json.Marshal(result)

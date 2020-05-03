@@ -26,6 +26,11 @@ type CompletionTimer struct {
 
 func NewCompletionTimer(maxIdleTime, maxTotalTime time.Duration, check func() bool) *CompletionTimer {
 	log.Tracef("MaxIdleTime: %v, MaxTotalTime: %v", maxIdleTime, maxTotalTime)
+	if check == nil {
+		check = func() bool {
+			return false
+		}
+	}
 	return &CompletionTimer{
 		maxIdleTime:  maxIdleTime,
 		maxTotalTime: maxTotalTime,
@@ -46,7 +51,7 @@ func (t *CompletionTimer) Notify() {
 			return
 		}
 	}
-	if t.idleTimer != nil && !t.idleTimer.Stop() {
+	if t.idleTimer != nil {
 		t.idleTimeout = time.Now().Add(t.maxIdleTime)
 	}
 }

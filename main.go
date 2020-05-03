@@ -50,7 +50,7 @@ func main() {
 	pflag.String("frontier-port", "7700", "Frontier port")
 	pflag.String("robots-evaluator-host", "veidemann-robotsevaluator-service", "Robots evaluator host")
 	pflag.String("robots-evaluator-port", "7053", "Robots evaluator port")
-	pflag.Duration("connect-timeout", 1*time.Minute, "Timeout used for connecting to GRPC services")
+	pflag.Duration("connect-timeout", 10*time.Minute, "Timeout used for connecting to GRPC services")
 	pflag.String("db-host", "rethinkdb-proxy", "DB host")
 	pflag.String("db-port", "28015", "DB port")
 	pflag.String("db-name", "veidemann", "DB name")

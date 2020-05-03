@@ -67,7 +67,7 @@ func newFuncConnectionOption(f func(*connectionOptions)) *funcConnectionOption {
 func defaultConnectionOptions(serviceName string) connectionOptions {
 	return connectionOptions{
 		serviceName:    serviceName,
-		connectTimeout: 5 * time.Second,
+		connectTimeout: 10 * time.Minute,
 	}
 }
 
