@@ -279,6 +279,45 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		}
 	}
 
+	_ = sess.netActivityTimer.WaitForCompletion()
+	sess.netActivityTimer.Reset()
+
+	// Scroll browser up to five pages and wait for activity to settle
+	var pos, prevPos float64
+	for it := 0; it < 5; it++ {
+		if err := chromedp.Run(ctx,
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				res, _, err := runtime.Evaluate("window.scrollBy(0, window.innerHeight); window.pageYOffset;").Do(ctx)
+				if err != nil {
+					pos, _ = strconv.ParseFloat(string(res.Value), 32)
+				}
+				return err
+			}),
+		); err != nil {
+			return nil, fmt.Errorf("failed initializing browser: %w", err)
+		}
+		if pos == prevPos {
+			break
+		}
+		prevPos = pos
+		_ = sess.netActivityTimer.WaitForCompletion()
+		notifyCount := sess.netActivityTimer.Reset()
+		if notifyCount == 0 {
+			break
+		}
+	}
+
+	// Move window back to top
+	sess.netActivityTimer.Reset()
+	if err := chromedp.Run(ctx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_, _, err := runtime.Evaluate("window.scrollTo(0, 0);").Do(ctx)
+			return err
+		}),
+	); err != nil {
+		return nil, fmt.Errorf("failed initializing browser: %w", err)
+	}
+
 	// Give scripts a chance to start by waiting for network activity to slow down
 	_ = sess.netActivityTimer.WaitForCompletion()
 

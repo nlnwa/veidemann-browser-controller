@@ -22,6 +22,7 @@ type CompletionTimer struct {
 	doneChan        chan interface{}
 	started         bool
 	done            int32 // 0: not done, 1: success, 2: cancel
+	notifyCount     int32
 }
 
 func NewCompletionTimer(maxIdleTime, maxTotalTime time.Duration, check func() bool) *CompletionTimer {
@@ -40,6 +41,9 @@ func NewCompletionTimer(maxIdleTime, maxTotalTime time.Duration, check func() bo
 }
 
 func (t *CompletionTimer) Notify() {
+	atomic.AddInt32(&t.notifyCount, 1)
+	t.idleTimeout = time.Now().Add(t.maxIdleTime)
+
 	if !t.started {
 		return
 	}
@@ -50,9 +54,6 @@ func (t *CompletionTimer) Notify() {
 			close(t.doneChan)
 			return
 		}
-	}
-	if t.idleTimer != nil {
-		t.idleTimeout = time.Now().Add(t.maxIdleTime)
 	}
 }
 
@@ -100,4 +101,12 @@ func (t *CompletionTimer) Cancel() {
 	if atomic.CompareAndSwapInt32(&t.done, 0, 2) {
 		close(t.doneChan)
 	}
+}
+
+// Reset lets the completion timer do a new WaitForCompletion if the previous returned an IdleTimeout
+// Reset returns the number of notifications received since last reset
+func (t *CompletionTimer) Reset() int32 {
+	atomic.CompareAndSwapInt32(&t.done, 1, 0)
+	t.started = false
+	return atomic.SwapInt32(&t.notifyCount, 0)
 }

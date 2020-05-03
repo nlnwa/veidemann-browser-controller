@@ -42,7 +42,7 @@ func Test_completionTimer_WaitForCompletion(t1 *testing.T) {
 			100 * time.Millisecond,
 			nil,
 			0,
-			2 * time.Millisecond,
+			5 * time.Millisecond,
 		},
 		{
 			"OK 2",
@@ -52,7 +52,7 @@ func Test_completionTimer_WaitForCompletion(t1 *testing.T) {
 			90 * time.Millisecond,
 			nil,
 			540 * time.Millisecond,
-			542 * time.Millisecond,
+			545 * time.Millisecond,
 		},
 		{
 			"OK 3",
@@ -62,7 +62,7 @@ func Test_completionTimer_WaitForCompletion(t1 *testing.T) {
 			100 * time.Millisecond,
 			nil,
 			500 * time.Millisecond,
-			502 * time.Millisecond,
+			505 * time.Millisecond,
 		},
 		{
 			"Idle timeout 1",
@@ -72,7 +72,7 @@ func Test_completionTimer_WaitForCompletion(t1 *testing.T) {
 			150 * time.Millisecond,
 			IdleTimeout,
 			100 * time.Millisecond,
-			102 * time.Millisecond,
+			105 * time.Millisecond,
 		},
 		{
 			"Idle timeout 2",
@@ -82,7 +82,7 @@ func Test_completionTimer_WaitForCompletion(t1 *testing.T) {
 			150 * time.Millisecond,
 			IdleTimeout,
 			100 * time.Millisecond,
-			102 * time.Millisecond,
+			105 * time.Millisecond,
 		},
 		{
 			"Max time 1",
@@ -92,7 +92,7 @@ func Test_completionTimer_WaitForCompletion(t1 *testing.T) {
 			10 * time.Millisecond,
 			ExceededMaxTime,
 			500 * time.Millisecond,
-			502 * time.Millisecond,
+			505 * time.Millisecond,
 		},
 		{
 			"Max time 2",
@@ -102,7 +102,7 @@ func Test_completionTimer_WaitForCompletion(t1 *testing.T) {
 			1000 * time.Millisecond,
 			ExceededMaxTime,
 			500 * time.Millisecond,
-			502 * time.Millisecond,
+			505 * time.Millisecond,
 		},
 	}
 	for _, tt := range tests {
