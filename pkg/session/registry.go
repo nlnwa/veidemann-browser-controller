@@ -53,8 +53,7 @@ func NewSessionRegistry(ctx context.Context, maxSessions int, opts ...SessionOpt
 func (sr *SessionRegistry) GetNextAvailable() (sess *Session, err error) {
 	select {
 	case <-sr.ctx.Done():
-		fmt.Printf("DONE\n")
-		return nil, fmt.Errorf("cancelled")
+		return nil, fmt.Errorf("canceled")
 	case i := <-sr.pool:
 		sr.mu.Lock()
 		defer sr.mu.Unlock()

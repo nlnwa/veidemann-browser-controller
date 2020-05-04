@@ -156,7 +156,6 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 			}
 
 			if sess == nil {
-				fmt.Printf("NULL SESSION: %v %v %v\n", v.New.RequestId, v.New.Method, v.New.Uri)
 				log.Infof("Cancelling Null session, proxy: %v, %v %v", v.New.ProxyId, v.New.Method, v.New.Uri)
 				if err = Send(stream, &browsercontrollerV1.DoReply{
 					Action: &browsercontrollerV1.DoReply_Cancel{
