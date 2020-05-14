@@ -76,6 +76,9 @@ type Session struct {
 	Fetch             func(QUri *frontierV1.QueuedUri, crawlConfig *configV1.ConfigObject) (*RenderResult, error)
 	RobotsIsAllowed   func(ctx context.Context, request *robotsevaluatorV1.IsAllowedRequest) bool
 	WriteScreenshot   func(ctx context.Context, sess *Session, data []byte) error
+
+	// Temporary workaround until we have proper configuration
+	scrollPages int
 }
 
 func New(sessionId int, opts ...SessionOption) (*Session, error) {
@@ -282,13 +285,14 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	_ = sess.netActivityTimer.WaitForCompletion()
 	sess.netActivityTimer.Reset()
 
-	// Scroll browser up to five pages and wait for activity to settle
+	// Scroll browser up to 'scrollPages' pages and wait for activity to settle
 	var pos, prevPos float64
-	for it := 0; it < 5; it++ {
+	for it := 0; it < sess.scrollPages; it++ {
+		log.Debugf("Scroll page #%d", it)
 		if err := chromedp.Run(ctx,
 			chromedp.ActionFunc(func(ctx context.Context) error {
 				res, _, err := runtime.Evaluate("window.scrollBy(0, window.innerHeight); window.pageYOffset;").Do(ctx)
-				if err != nil {
+				if err == nil {
 					pos, _ = strconv.ParseFloat(string(res.Value), 32)
 				}
 				return err
@@ -300,8 +304,12 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 			break
 		}
 		prevPos = pos
+		log.Tracef("Wait for activity after scroll page #%d", it)
+		waitStart := time.Now()
 		_ = sess.netActivityTimer.WaitForCompletion()
+		log.Tracef("Waited %v for network activity to settle", time.Since(waitStart))
 		notifyCount := sess.netActivityTimer.Reset()
+		log.Tracef("Got %d notifications while waiting for network activity to settle for page scroll #%d", notifyCount, it)
 		if notifyCount == 0 {
 			break
 		}
