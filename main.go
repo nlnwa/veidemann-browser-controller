@@ -65,6 +65,10 @@ func main() {
 	pflag.String("log-formatter", "logfmt", "log formatter, available values are logfmt and json")
 	pflag.Bool("log-method", false, "log method names")
 
+	// TODO: Make a more sustainable solution
+	// Temporary workaround until we have proper configuration
+	pflag.Int("scroll-pages", 20, "The amount of pages to scroll to get dynamically loaded resources")
+
 	pflag.Parse()
 	viper.BindPFlags(pflag.CommandLine)
 
@@ -155,6 +159,7 @@ func main() {
 			session.WithProxyHost(viper.GetString("proxy-host")),
 			session.WithProxyPort(viper.GetInt("proxy-port")),
 			session.WithDbAdapter(configCache),
+			session.WithScrollPages(viper.GetInt("scroll-pages")),
 		),
 	)
 	go bc.Start()

@@ -51,6 +51,7 @@ func defaultSessionOptions() *Session {
 		browserPort:    3000,
 		browserTimeout: 500 * 1000,
 		proxyPort:      3000,
+		scrollPages:    20,
 	}
 	sess.Fetch = sess.fetch
 	return sess
@@ -101,5 +102,11 @@ func WithIsAllowedByRobotsTxtFunc(f func(ctx context.Context, request *robotseva
 func WithWriteScreenshotFunc(f func(ctx context.Context, sess *Session, data []byte) error) SessionOption {
 	return newFuncSessionOption(func(s *Session) {
 		s.WriteScreenshot = f
+	})
+}
+
+func WithScrollPages(scrollPages int) SessionOption {
+	return newFuncSessionOption(func(s *Session) {
+		s.scrollPages = scrollPages
 	})
 }
