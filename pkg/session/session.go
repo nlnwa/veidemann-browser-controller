@@ -534,7 +534,7 @@ func (sess *Session) saveScreenshot() {
 func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 	cookies := sess.extractCookies()
 	extractedUrls := make(map[string]interface{})
-	for _, s := range sess.DbAdapter.GetScripts(sess.BrowserConfig, "extract_outlinks") {
+	for _, s := range sess.DbAdapter.GetScripts(sess.BrowserConfig, configV1.BrowserScript_EXTRACT_OUTLINKS) {
 		log.Debugf("Executing link extractor script")
 		var res *runtime.RemoteObject
 		var errDetail *runtime.ExceptionDetails

@@ -20,7 +20,6 @@ import (
 	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/protobuf/proto"
 	"regexp"
 	"strings"
 	"sync"
@@ -70,13 +69,11 @@ func (cc *DbAdapter) GetConfigObject(ref *configV1.ConfigRef) (*configV1.ConfigO
 	return result, nil
 }
 
-func (cc *DbAdapter) GetScripts(browserConfig *configV1.BrowserConfig, scriptType string) []*configV1.BrowserScript {
-	label := &configV1.Label{Key: "type", Value: scriptType}
-
+func (cc *DbAdapter) GetScripts(browserConfig *configV1.BrowserConfig, scriptType configV1.BrowserScript_BrowserScriptType) []*configV1.BrowserScript {
 	var scripts []*configV1.BrowserScript
 	for _, scriptRef := range browserConfig.ScriptRef {
 		if script, err := cc.GetConfigObject(scriptRef); err == nil {
-			if containsLabel(script, label) {
+			if isType(script, scriptType) {
 				scripts = append(scripts, script.GetBrowserScript())
 			}
 		}
@@ -93,7 +90,7 @@ func (cc *DbAdapter) GetScripts(browserConfig *configV1.BrowserConfig, scriptTyp
 		}
 		if objs, err := cc.db.GetConfigsForSelector(configV1.Kind_browserScript, label); err == nil {
 			for _, script := range objs {
-				if containsLabel(script, label) {
+				if isType(script, scriptType) {
 					scripts = append(scripts, script.GetBrowserScript())
 				}
 				cc.cache[script.Id] = &entry{
@@ -107,20 +104,15 @@ func (cc *DbAdapter) GetScripts(browserConfig *configV1.BrowserConfig, scriptTyp
 	return scripts
 }
 
-func containsLabel(object *configV1.ConfigObject, label *configV1.Label) bool {
-	for _, l := range object.Meta.Label {
-		if proto.Equal(label, l) {
-			return true
-		}
-	}
-	return false
+func isType(object *configV1.ConfigObject, browserScriptType configV1.BrowserScript_BrowserScriptType) bool {
+	return object.GetBrowserScript().BrowserScriptType == browserScriptType
 }
 
 func (cc *DbAdapter) GetReplacementScript(browserConfig *configV1.BrowserConfig, uri string) *configV1.BrowserScript {
 	normalizedUri := NormalizeUrl(uri)
 	longestMatch := 0
 	var currentBestMatch *configV1.BrowserScript
-	for _, bc := range cc.GetScripts(browserConfig, "replacement") {
+	for _, bc := range cc.GetScripts(browserConfig, configV1.BrowserScript_REPLACEMENT) {
 		for _, urlRegexp := range bc.UrlRegexp {
 			if re, err := regexp.Compile(urlRegexp); err == nil {
 				re.Longest()
