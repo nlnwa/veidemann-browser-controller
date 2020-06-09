@@ -105,7 +105,6 @@ func (cc *DbAdapter) GetScripts(browserConfig *configV1.BrowserConfig, scriptTyp
 }
 
 func isType(object *configV1.ConfigObject, browserScriptType configV1.BrowserScript_BrowserScriptType) bool {
-	log.Warn("got scripttype in configObj: ", object.GetBrowserScript().BrowserScriptType);
 	return object.GetBrowserScript().BrowserScriptType == browserScriptType
 }
 
