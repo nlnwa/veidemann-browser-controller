@@ -82,25 +82,30 @@ func (c *connection) GetConfig(ref *configV1.ConfigRef) (*configV1.ConfigObject,
 }
 
 func (c *connection) GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
-	res, err := r.Table("config").GetAllByIndex("label", r.Expr([]string{label.Key, label.Value})).Run(c.dbSession)
+	res, err := r.Table("config").GetAllByIndex("label", r.Expr([]string{label.Key, label.Value})).
+		Filter(func(row r.Term) r.Term {
+			return row.Field("kind").Eq(kind.String())
+		}).
+		Run(c.dbSession)
 	if err != nil {
 		return nil, err
 	}
-	defer res.Close()
-	var r []configV1.ConfigObject
-	err = res.All(&r)
-	if err != nil {
-		return nil, fmt.Errorf("DB error: %w", err)
+	defer func() {
+		_ = res.Close()
+	}()
+
+	var configObject configV1.ConfigObject
+	var configObjects []*configV1.ConfigObject
+	for res.Next(&configObject) {
+		//noinspection GoVetCopyLock
+		aCopy := configObject
+		configObjects = append(configObjects, &aCopy)
+	}
+	if err := res.Err(); err != nil {
+		return nil, fmt.Errorf("failed to fetch config from cursor: %v", err)
 	}
 
-	var result []*configV1.ConfigObject
-	for _, co := range r {
-		if co.Kind == kind {
-			result = append(result, &co)
-		}
-	}
-
-	return result, nil
+	return configObjects, nil
 }
 
 func (c *connection) WriteCrawlLog(crawlLog *frontierV1.CrawlLog) error {
