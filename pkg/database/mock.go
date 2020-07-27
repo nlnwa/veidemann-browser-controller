@@ -1,6 +1,7 @@
 package database
 
 import (
+	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -60,4 +61,14 @@ func (c *Mock) WritePageLog(pageLog *frontierV1.PageLog) error {
 	}
 
 	return c.connection.WritePageLog(pageLog)
+}
+
+func (cc *Mock) GetSeedByUri(uri *frontierV1.QueuedUri) (*configV1.ConfigObject, error) {
+	return &configV1.ConfigObject{
+		Id: uri.Uri,
+		Meta: &configV1.Meta{
+			Name: uri.Uri,
+			Annotation: make([]*configV1.Annotation, 0),
+		},
+	}, nil
 }

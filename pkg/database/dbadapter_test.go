@@ -10,8 +10,8 @@ import (
 
 var (
 	v1 = &configV1.ConfigObject{Kind: configV1.Kind_crawlJob, Id: "1", Meta: &configV1.Meta{Name: "1"}}
-	v2 = &configV1.ConfigObject{Kind: configV1.Kind_crawlJob, Id: "1", Meta: &configV1.Meta{Name: "2"}}
-	v3 = &configV1.ConfigObject{Kind: configV1.Kind_crawlJob, Id: "1", Meta: &configV1.Meta{Name: "3"}}
+	v2 = &configV1.ConfigObject{Kind: configV1.Kind_crawlJob, Id: "2", Meta: &configV1.Meta{Name: "2"}}
+	v3 = &configV1.ConfigObject{Kind: configV1.Kind_crawlJob, Id: "3", Meta: &configV1.Meta{Name: "3"}}
 )
 
 type dbConnMock struct {
@@ -35,6 +35,10 @@ func (d *dbConnMock) Connect() error {
 }
 
 func (d *dbConnMock) GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
+	panic("implement me")
+}
+
+func (c *dbConnMock) GetSeedByUri(qUri *frontier.QueuedUri) (*configV1.ConfigObject, error) {
 	panic("implement me")
 }
 
