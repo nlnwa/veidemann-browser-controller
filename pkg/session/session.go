@@ -521,11 +521,12 @@ func (sess *Session) executeOnLoadScripts() {
 				}
 			}
 
+			_, isUpdateEcu := annotations["ecu"]
 			// check if eg. a location change has caused creation of new execution contexts
 			// we want the next script to run in new root context if created
-			if len(sess.ecd) > ecdLength {
+			if isUpdateEcu && len(sess.ecd) > ecdLength {
 				for _, ecd := range sess.ecd[ecdLength:] {
-					// check if a new executionContext has been created
+					// use the first new execution context created matching uri
 					if ecd.Name == "" && strings.HasPrefix(sess.RequestedUrl.Uri, ecd.Origin) {
 						eci = ecd.ID
 						break
