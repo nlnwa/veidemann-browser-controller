@@ -332,7 +332,7 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 			crawlLogCount++
 			bytesDownloaded += r.CrawlLog.Size
 		} else {
-			log.Debugf("Skipping write of %v %v %v, From cache %v, Has CrawlLog: %v", r.RequestId, r.Method, r.Url, r.FromCache, r.CrawlLog != nil)
+			log.Tracef("Skipping write of %v %v %v, From cache %v, Has CrawlLog: %v", r.RequestId, r.Method, r.Url, r.FromCache, r.CrawlLog != nil)
 		}
 
 		if r.CrawlLog != nil {

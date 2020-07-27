@@ -30,11 +30,11 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 			}
 		case *runtime.EventExecutionContextCreated:
 			sess.ecd = append(sess.ecd, ev.Context)
-			if log.IsLevelEnabled(log.DebugLevel) {
+			if log.IsLevelEnabled(log.TraceLevel) {
 				var auxData interface{}
 				err := json.Unmarshal(ev.Context.AuxData, &auxData)
 				if err == nil {
-					log.Debugf("execution context created (%d): %s %s %+v", ev.Context.ID, ev.Context.Origin, ev.Context.Name, auxData)
+					log.Tracef("execution context created (%d): %s %s %+v", ev.Context.ID, ev.Context.Origin, ev.Context.Name, auxData)
 				}
 			}
 		case *network.EventLoadingFailed:
