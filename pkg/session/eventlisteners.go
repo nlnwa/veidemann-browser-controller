@@ -37,6 +37,9 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 					log.Tracef("execution context created (%d): %s %s %+v", ev.Context.ID, ev.Context.Origin, ev.Context.Name, auxData)
 				}
 			}
+		case *page.EventLoadEventFired:
+			log.Debug("Load event")
+			sess.onLoadWg.Done()
 		case *network.EventLoadingFailed:
 			log.Debugf("Loading failed: %v, %v, Reason; %v, Cancel: %v, %v, %v", ev.RequestID, ev.Type, ev.BlockedReason, ev.Canceled, ev.ErrorText, ev.Timestamp.Time())
 		case *page.EventFrameStartedLoading:
