@@ -15,9 +15,8 @@ require (
 	github.com/golang/protobuf v1.4.2
 	github.com/gotestyourself/gotestyourself v2.2.0+incompatible // indirect
 	github.com/lib/pq v1.3.0 // indirect
-	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
-	github.com/modern-go/reflect2 v1.0.1 // indirect
-	github.com/nlnwa/veidemann-api-go v1.0.0-beta16
+	github.com/mailru/easyjson v0.7.1
+	github.com/nlnwa/veidemann-api-go v1.0.0-beta17
 	github.com/nlnwa/veidemann-recorderproxy v0.2.6
 	github.com/nlnwa/whatwg-url v0.0.0-20200322073154-8c2d737699d5
 	github.com/opencontainers/image-spec v1.0.1 // indirect
