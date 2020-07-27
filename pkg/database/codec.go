@@ -28,6 +28,22 @@ var decodeConfigObject = func(encoded interface{}, value reflect.Value) error {
 	return nil
 }
 
+var decodeCrawlExecutionStatus = func(encoded interface{}, value reflect.Value) error {
+	b, err := json.Marshal(encoded)
+	if err != nil {
+		return fmt.Errorf("error decoding CrawlExecutionStatus: %v", err)
+	}
+
+	var co frontierV1.CrawlExecutionStatus
+	err = protojson.Unmarshal(b, &co)
+	if err != nil {
+		return fmt.Errorf("error decoding CrawlExecutionStatus: %v", err)
+	}
+
+	value.Set(reflect.ValueOf(co))
+	return nil
+}
+
 var encodeProtoMessage = func(value interface{}) (i interface{}, err error) {
 	b, err := protojson.Marshal(value.(proto.Message))
 	if err != nil {
@@ -47,6 +63,11 @@ func init() {
 		reflect.TypeOf(&configV1.ConfigObject{}),
 		encodeProtoMessage,
 		decodeConfigObject,
+	)
+	encoding.SetTypeEncoding(
+		reflect.TypeOf(&frontierV1.CrawlExecutionStatus{}),
+		encodeProtoMessage,
+		decodeCrawlExecutionStatus,
 	)
 	encoding.SetTypeEncoding(
 		reflect.TypeOf(&frontierV1.CrawlLog{}),

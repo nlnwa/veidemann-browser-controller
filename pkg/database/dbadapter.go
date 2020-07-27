@@ -69,38 +69,50 @@ func (cc *DbAdapter) GetConfigObject(ref *configV1.ConfigRef) (*configV1.ConfigO
 	return result, nil
 }
 
-func (cc *DbAdapter) GetScripts(browserConfig *configV1.BrowserConfig, scriptType configV1.BrowserScript_BrowserScriptType) []*configV1.BrowserScript {
-	var scripts []*configV1.BrowserScript
+func (cc *DbAdapter) GetSeedByUri(uri *frontierV1.QueuedUri) *configV1.ConfigObject {
+	if result, err := cc.db.GetSeedByUri(uri); err == nil {
+		return result
+	}
+	return nil
+}
+
+// fetch configObjects by selector string (key:value)
+func (cc *DbAdapter) getConfigsForSelector(selector string) ([]*configV1.ConfigObject, error) {
+	t := strings.Split(selector, ":")
+	label := &configV1.Label{
+		Key:   t[0],
+		Value: t[1],
+	}
+	return cc.db.GetConfigsForSelector(configV1.Kind_browserScript, label)
+}
+
+func (cc *DbAdapter) GetScripts(browserConfig *configV1.BrowserConfig, scriptType configV1.BrowserScript_BrowserScriptType) []*configV1.ConfigObject {
+	var scripts []*configV1.ConfigObject
 	for _, scriptRef := range browserConfig.ScriptRef {
 		if script, err := cc.GetConfigObject(scriptRef); err == nil {
 			if isType(script, scriptType) {
-				scripts = append(scripts, script.GetBrowserScript())
+				scripts = append(scripts, script)
 			}
 		}
 	}
-
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-
 	for _, selector := range browserConfig.ScriptSelector {
-		t := strings.Split(selector, ":")
-		label := &configV1.Label{
-			Key:   t[0],
-			Value: t[1],
+		configs, err := cc.getConfigsForSelector(selector)
+		if err != nil {
+			log.Errorf("%v", err)
+			continue
 		}
-		if objs, err := cc.db.GetConfigsForSelector(configV1.Kind_browserScript, label); err == nil {
-			for _, script := range objs {
-				if isType(script, scriptType) {
-					scripts = append(scripts, script.GetBrowserScript())
-				}
-				cc.cache[script.Id] = &entry{
+		for _, config := range configs {
+			if isType(config, scriptType) {
+				scripts = append(scripts, config)
+				cc.cache[config.Id] = &entry{
 					expires: time.Now().Add(cc.ttl),
-					conf:    script,
+					conf:    config,
 				}
 			}
 		}
 	}
-
 	return scripts
 }
 
@@ -113,13 +125,13 @@ func (cc *DbAdapter) GetReplacementScript(browserConfig *configV1.BrowserConfig,
 	longestMatch := 0
 	var currentBestMatch *configV1.BrowserScript
 	for _, bc := range cc.GetScripts(browserConfig, configV1.BrowserScript_REPLACEMENT) {
-		for _, urlRegexp := range bc.UrlRegexp {
+		for _, urlRegexp := range bc.GetBrowserScript().UrlRegexp {
 			if re, err := regexp.Compile(urlRegexp); err == nil {
 				re.Longest()
 				l := len(re.FindString(normalizedUri))
 				if l > 0 && l > longestMatch {
 					longestMatch = l
-					currentBestMatch = bc
+					currentBestMatch = bc.GetBrowserScript()
 				}
 			} else {
 				log.Warnf("Could not match url for replacement script %v", err)

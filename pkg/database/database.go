@@ -28,6 +28,7 @@ type DbConnection interface {
 	Connect() error
 	GetConfig(ref *configV1.ConfigRef) (*configV1.ConfigObject, error)
 	GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error)
+	GetSeedByUri(qUri *frontierV1.QueuedUri) (*configV1.ConfigObject, error)
 	WriteCrawlLog(crawlLog *frontierV1.CrawlLog) error
 	WritePageLog(pageLog *frontierV1.PageLog) error
 }
@@ -71,36 +72,78 @@ func (c *connection) GetConfig(ref *configV1.ConfigRef) (*configV1.ConfigObject,
 	if err != nil {
 		return nil, err
 	}
-	defer res.Close()
 	var result configV1.ConfigObject
 	err = res.One(&result)
-
 	if err != nil {
 		return nil, fmt.Errorf("DB error: %w", err)
 	}
+
 	return &result, nil
 }
 
-func (c *connection) GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
-	res, err := r.Table("config").GetAllByIndex("label", r.Expr([]string{label.Key, label.Value})).Run(c.dbSession)
+func (c *connection) getSeedById(id string) (*configV1.ConfigObject, error) {
+	res, err := r.Table("config_seeds").Get(id).Run(c.dbSession)
 	if err != nil {
 		return nil, err
 	}
-	defer res.Close()
-	var r []configV1.ConfigObject
-	err = res.All(&r)
+	var result configV1.ConfigObject
+	err = res.One(&result)
 	if err != nil {
 		return nil, fmt.Errorf("DB error: %w", err)
 	}
 
-	var result []*configV1.ConfigObject
-	for _, co := range r {
-		if co.Kind == kind {
-			result = append(result, &co)
-		}
+	return &result, nil
+}
+
+func (c *connection) getCrawlExecutionStatus(executionId string) (*frontierV1.CrawlExecutionStatus, error) {
+	res, err := r.Table("executions").Get(executionId).Run(c.dbSession)
+	if err != nil {
+		return nil, err
+	}
+	var result frontierV1.CrawlExecutionStatus
+	err = res.One(&result)
+	if err != nil {
+		return nil, fmt.Errorf("DB error: %w", err)
 	}
 
-	return result, nil
+	return &result, nil
+}
+
+func (c *connection) GetSeedByUri(qUri *frontierV1.QueuedUri) (*configV1.ConfigObject, error) {
+	crawlExecutionStatus, err := c.getCrawlExecutionStatus(qUri.ExecutionId)
+	if err != nil {
+		return nil, err
+	}
+	seedId := crawlExecutionStatus.SeedId
+
+	return c.getSeedById(seedId)
+}
+
+func (c *connection) GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
+	res, err := r.Table("config").GetAllByIndex("label", r.Expr([]string{label.Key, label.Value})).
+		Filter(func(row r.Term) r.Term {
+			return row.Field("kind").Eq(kind.String())
+		}).
+		Run(c.dbSession)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = res.Close()
+	}()
+
+	var configObject configV1.ConfigObject
+	var configObjects []*configV1.ConfigObject
+	for res.Next(&configObject) {
+		//noinspection GoVetCopyLock
+		aCopy := configObject
+		configObjects = append(configObjects, &aCopy)
+	}
+	if err := res.Err(); err != nil {
+		return nil, fmt.Errorf("failed to fetch config from cursor: %v", err)
+	}
+
+	return configObjects, nil
 }
 
 func (c *connection) WriteCrawlLog(crawlLog *frontierV1.CrawlLog) error {
