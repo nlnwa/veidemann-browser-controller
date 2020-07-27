@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
@@ -26,6 +27,15 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 			log.Tracef("Request will be sent: %v, %v, %v, %v, %v, %v", ev.RequestID, ev.Type, ev.FrameID, ev.Initiator.Type, ev.LoaderID, ev.DocumentURL)
 			if req := sess.Requests.GetByNetworkId(ev.RequestID.String()); req != nil {
 				req.Initiator = ev.Initiator.Type.String()
+			}
+		case *runtime.EventExecutionContextCreated:
+			sess.ecd = append(sess.ecd, ev.Context)
+			if log.IsLevelEnabled(log.DebugLevel) {
+				var auxData interface{}
+				err := json.Unmarshal(ev.Context.AuxData, &auxData)
+				if err == nil {
+					log.Debugf("execution context created (%d): %s %s %+v", ev.Context.ID, ev.Context.Origin, ev.Context.Name, auxData)
+				}
 			}
 		case *network.EventLoadingFailed:
 			log.Debugf("Loading failed: %v, %v, Reason; %v, Cancel: %v, %v, %v", ev.RequestID, ev.Type, ev.BlockedReason, ev.Canceled, ev.ErrorText, ev.Timestamp.Time())
@@ -105,7 +115,10 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 
 				chromedp.ListenTarget(newCtx, sess.listenFunc(newCtx))
 			}()
-			sess.Notify(ev.TargetInfo.TargetID.String())
+			err := sess.Notify(ev.TargetInfo.TargetID.String())
+			if err != nil {
+				log.Error(err)
+			}
 		case *fetch.EventRequestPaused:
 			go func() {
 				continueRequest := fetch.ContinueRequest(ev.RequestID)
@@ -136,12 +149,13 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 				} else {
 					log.Infof("RESPONSE REQUEST %v %v %v\n", ev.ResponseStatusCode, ev.ResponseErrorReason, ev.Request.URL)
 				}
-				if err := chromedp.Run(ctx,
-					continueRequest,
-				); err != nil {
+				if err := chromedp.Run(ctx, continueRequest); err != nil {
 					log.Debugf("Failed sending continue: %v", err)
 				} else {
-					sess.Notify(ev.RequestID.String())
+					err = sess.Notify(ev.RequestID.String())
+					if err != nil {
+						log.Error(err)
+					}
 				}
 			}()
 		}

@@ -18,6 +18,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
@@ -31,6 +32,7 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/device"
 	"github.com/golang/protobuf/ptypes"
+	"github.com/mailru/easyjson"
 	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
@@ -50,9 +52,16 @@ import (
 	"time"
 )
 
+type ReturnValue struct {
+	WaitForData bool            `json:"waitForData,omitempty"`
+	Next        string          `json:"next,omitempty"`
+	Data        json.RawMessage `json:"data,omitempty"`
+}
+
 type Session struct {
 	Id                int
 	ctx               context.Context
+	ecd               []*runtime.ExecutionContextDescription
 	browserHost       string
 	browserPort       int
 	browserTimeout    int
@@ -285,46 +294,7 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	_ = sess.netActivityTimer.WaitForCompletion()
 	sess.netActivityTimer.Reset()
 
-	// Scroll browser up to 'scrollPages' pages and wait for activity to settle
-	var pos, prevPos float64
-	for it := 0; it < sess.scrollPages; it++ {
-		log.Debugf("Scroll page #%d", it)
-		if err := chromedp.Run(ctx,
-			chromedp.ActionFunc(func(ctx context.Context) error {
-				res, _, err := runtime.Evaluate("window.scrollBy(0, window.innerHeight); window.pageYOffset;").Do(ctx)
-				if err == nil {
-					pos, _ = strconv.ParseFloat(string(res.Value), 32)
-				}
-				return err
-			}),
-		); err != nil {
-			return nil, fmt.Errorf("failed initializing browser: %w", err)
-		}
-		if pos == prevPos {
-			break
-		}
-		prevPos = pos
-		log.Tracef("Wait for activity after scroll page #%d", it)
-		waitStart := time.Now()
-		_ = sess.netActivityTimer.WaitForCompletion()
-		log.Tracef("Waited %v for network activity to settle", time.Since(waitStart))
-		notifyCount := sess.netActivityTimer.Reset()
-		log.Tracef("Got %d notifications while waiting for network activity to settle for page scroll #%d", notifyCount, it)
-		if notifyCount == 0 {
-			break
-		}
-	}
-
-	// Move window back to top
-	sess.netActivityTimer.Reset()
-	if err := chromedp.Run(ctx,
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			_, _, err := runtime.Evaluate("window.scrollTo(0, 0);").Do(ctx)
-			return err
-		}),
-	); err != nil {
-		return nil, fmt.Errorf("failed initializing browser: %w", err)
-	}
+	sess.executeOnLoadScripts()
 
 	// Give scripts a chance to start by waiting for network activity to slow down
 	_ = sess.netActivityTimer.WaitForCompletion()
@@ -356,7 +326,7 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	sess.Requests.Walk(func(r *requests.Request) {
 		if r.CrawlLog != nil && r.CrawlLog.WarcId != "" {
 			if err := sess.DbAdapter.WriteCrawlLog(r.CrawlLog); err != nil {
-				log.Errorf("error writing crawlLog: %w", err)
+				log.Errorf("error writing crawlLog: %v", err)
 				return
 			}
 			crawlLogCount++
@@ -389,10 +359,10 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		sess.saveScreenshot()
 	}
 
-	outlinks := sess.extractOutlinks()
-	outlinkUrls := make([]string, len(outlinks))
-	for i, o := range outlinks {
-		outlinkUrls[i] = o.Uri
+	qUris := sess.extractOutlinks()
+	outlinks := make([]string, len(qUris))
+	for _, outlink := range qUris {
+		outlinks = append(outlinks, outlink.Uri)
 	}
 
 	err = chromedp.Cancel(ctx)
@@ -410,7 +380,7 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 			CollectionFinalName: sess.Requests.InitialRequest().CrawlLog.CollectionFinalName,
 			Method:              sess.Requests.InitialRequest().Method,
 			Resource:            resources,
-			Outlink:             outlinkUrls,
+			Outlink:             outlinks,
 		}
 		if err := sess.DbAdapter.WritePageLog(pageLog); err != nil {
 			return nil, fmt.Errorf("error writing pageLog: %w", err)
@@ -424,7 +394,7 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	result = &RenderResult{
 		BytesDownloaded: bytesDownloaded,
 		UriCount:        crawlLogCount,
-		Outlinks:        outlinks,
+		Outlinks:        qUris,
 		Error:           sess.Requests.InitialRequest().CrawlLog.Error,
 		PageFetchTimeMs: fetchDuration.Milliseconds(),
 	}
@@ -432,6 +402,175 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	sess.cleanWorkspace()
 	log.Debugf("Fetch done: %v", QUri.Uri)
 	return result, nil
+}
+
+func (sess *Session) callScript(eci runtime.ExecutionContextID, fn string, arguments json.RawMessage) (easyjson.RawMessage, error) {
+	var res *runtime.RemoteObject
+	var exceptionDetails *runtime.ExceptionDetails
+	err := chromedp.Run(sess.ctx,
+		chromedp.ActionFunc(func(ctx context.Context) (err error) {
+			res, exceptionDetails, err = runtime.
+				CallFunctionOn(fn).
+				WithArguments([]*runtime.CallArgument{{Value: easyjson.RawMessage(arguments)}}).
+				WithExecutionContextID(eci).
+				WithReturnByValue(true).
+				Do(ctx)
+			return err
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("%v: %w", exceptionDetails, err)
+	}
+	return res.Value, nil
+}
+
+func (sess *Session) executeOnLoadScripts() {
+	log.Debugf("%v", configV1.BrowserScript_ON_LOAD)
+
+	seedAnnotations := sess.DbAdapter.GetSeedByUri(sess.RequestedUrl).GetMeta().GetAnnotation()
+
+	undefinedScripts := make(map[string]string)
+	undefinedScriptAnnotations := make(map[string][]*configV1.Annotation)
+	for _, script := range sess.DbAdapter.GetScripts(sess.BrowserConfig, configV1.BrowserScript_UNDEFINED) {
+		undefinedScripts[script.Meta.Name] = script.GetBrowserScript().GetScript()
+		undefinedScriptAnnotations[script.Meta.Name] = script.GetMeta().GetAnnotation()
+	}
+
+	for _, script := range sess.DbAdapter.GetScripts(sess.BrowserConfig, configV1.BrowserScript_ON_LOAD) {
+		scriptAnnotations := script.GetMeta().GetAnnotation()
+
+		// merge annotations from seed and script
+		annotations := make(map[string]string)
+		for _, a := range scriptAnnotations {
+			annotations[a.Key] = a.Value
+		}
+		// seed annotations override script annotations
+		for _, b := range seedAnnotations {
+			annotations[b.Key] = b.Value
+		}
+
+		initialArgs, err := json.Marshal(&annotations)
+		if err != nil {
+			log.Errorf("%v", err)
+			continue
+		}
+
+		var eci runtime.ExecutionContextID
+		// try to pick top level javascript execution context
+		ecdLength := len(sess.ecd)
+		for _, ecd := range sess.ecd {
+			if ecd.Name == "" && strings.HasPrefix(sess.RequestedUrl.Uri, ecd.Origin) {
+				eci = ecd.ID
+				break
+			}
+		}
+		if eci == 0 {
+			log.Error("failed to get execution context")
+			continue
+		}
+
+		// initalize function arguments
+		arguments := json.RawMessage(initialArgs)
+		// name of next script to run (self is current script)
+		next := "self"
+
+		for {
+			var fn string
+			if len(next) == 0 {
+				break
+			} else if next == "self" {
+				fn = script.GetBrowserScript().GetScript()
+				next = script.GetMeta().GetName()
+			} else {
+				var ok bool
+				if fn, ok = undefinedScripts[next]; !ok {
+					log.Errorf("No such next script: \"%s\"", next)
+					break
+				}
+				annotations := make(map[string]interface{})
+				// add seed annotations
+				for _, b := range seedAnnotations {
+					annotations[b.Key] = b.Value
+				}
+				// add annotations from next browserScript
+				for _, annotation := range undefinedScriptAnnotations[next] {
+					annotations[annotation.Key] = annotation.Value
+				}
+				var currentArguments map[string]interface{}
+				err := json.Unmarshal(arguments, &currentArguments)
+				if err != nil {
+					// pass
+				}
+				// add currentArguments
+				for key, value := range currentArguments {
+					annotations[key] = value
+				}
+				arguments, err = json.Marshal(annotations)
+				if err != nil {
+					log.Errorf("failed")
+					break
+				}
+			}
+			if log.IsLevelEnabled(log.DebugLevel) {
+				args := make(map[string]interface{})
+				err = json.Unmarshal(arguments, &args)
+				if err != nil {
+					log.Errorf("failed to unmarshal arguments: %v", err)
+				} else {
+					log.Debugf("executing %s(%+v) in context %v", next, args, eci)
+				}
+			}
+
+			// check if eg. a location change has caused creation of new execution contexts
+			// we want the next script to run in new root context if created
+			if len(sess.ecd) > ecdLength {
+				for _, ecd := range sess.ecd[ecdLength:] {
+					// check if a new executionContext has been created
+					if ecd.Name == "" && strings.HasPrefix(sess.RequestedUrl.Uri, ecd.Origin) {
+						eci = ecd.ID
+						break
+					}
+				}
+				ecdLength = len(sess.ecd)
+			}
+
+			result, err := sess.callScript(eci, fn, arguments)
+			if err != nil {
+				log.Errorf("failed to call script: %v", err)
+				break
+			}
+			if result == nil {
+				break
+			}
+			var rv ReturnValue
+			err = json.Unmarshal(result, &rv)
+			if err != nil {
+				log.Errorf("failed to unmarshal return value: %v", err)
+				break
+			}
+
+			if log.IsLevelEnabled(log.DebugLevel) {
+				var d interface{}
+				err = json.Unmarshal(rv.Data, &d)
+				if err != nil {
+					log.Errorf("failed to unmarshal data: %v", err)
+				} else {
+					log.Debugf("return {waitForCompletion: %t, next: %s, data: %+v}", rv.WaitForData, rv.Next, d)
+				}
+			}
+
+			arguments = rv.Data
+			next = rv.Next
+			if rv.WaitForData {
+				log.Trace("Wait for activity after script execution")
+				waitStart := time.Now()
+				_ = sess.netActivityTimer.WaitForCompletion()
+				log.Tracef("Waited %v for network activity to settle", time.Since(waitStart))
+				notifyCount := sess.netActivityTimer.Reset()
+				log.Tracef("Got %d notifications while waiting for network activity to settle", notifyCount)
+			}
+		}
+	}
 }
 
 // cleanWorkspace removes downloaded resources in browser container
@@ -514,7 +653,6 @@ func (sess *Session) saveScreenshot() {
 		return
 	}
 
-	log.Debugf("Saving screenshot")
 	var data []byte
 	err := chromedp.Run(sess.ctx,
 		chromedp.ActionFunc(func(ctx context.Context) (err error) {
@@ -523,6 +661,7 @@ func (sess *Session) saveScreenshot() {
 		}),
 	)
 	if err != nil {
+		log.Errorf("Error capturing screenshot: %v", err)
 		return
 	}
 	if err = sess.WriteScreenshot(sess.ctx, sess, data); err != nil {
@@ -533,29 +672,37 @@ func (sess *Session) saveScreenshot() {
 
 func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 	cookies := sess.extractCookies()
-	extractedUrls := make(map[string]interface{})
+	var extractedUrls []string
 	for _, s := range sess.DbAdapter.GetScripts(sess.BrowserConfig, configV1.BrowserScript_EXTRACT_OUTLINKS) {
-		log.Debugf("Executing link extractor script")
+		log.Debugf("executing link extractor script")
 		var res *runtime.RemoteObject
 		var errDetail *runtime.ExceptionDetails
 		err := chromedp.Run(sess.ctx,
 			chromedp.ActionFunc(func(ctx context.Context) (err error) {
-				res, errDetail, err = runtime.Evaluate(s.Script).WithReturnByValue(true).Do(ctx)
+				res, errDetail, err = runtime.Evaluate(s.GetBrowserScript().GetScript()).
+					WithReturnByValue(true).Do(ctx)
 				return err
 			}),
 		)
 		if err != nil {
-			log.Warnf("Error executing script: %v %v", err, errDetail)
+			log.Warnf("evaluate script: %v %v", err, errDetail)
 			continue
 		}
 		if res.Value != nil {
-			links := strings.Split(string(res.Value), "\\n")
+			var links []string
+			err := json.Unmarshal(res.Value, &links)
+			if err != nil {
+				log.Warnf("unmarshal return value: %v", err)
+				continue
+			}
+
 			log.Debugf("Found %d outlinks.", len(links))
-			for _, l := range links {
-				l = strings.TrimSpace(l)
-				l = strings.Trim(l, "\"\\")
-				if l != "" && l != sess.Requests.RootRequest().Url {
-					extractedUrls[l] = ""
+
+			for _, link := range links {
+				link = strings.TrimSpace(link)
+				link = strings.Trim(link, "\"\\")
+				if link != "" && link != sess.Requests.RootRequest().Url {
+					extractedUrls = append(extractedUrls, link)
 				}
 			}
 		}
@@ -563,21 +710,20 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 
 	outlinks := make([]*frontierV1.QueuedUri, len(extractedUrls))
 
-	i := 0
-	for l, _ := range extractedUrls {
-		log.Tracef("Outlink: %v", l)
+	for _, uri := range extractedUrls {
+		log.Tracef("Outlink: %v", uri)
 		outlink := &frontierV1.QueuedUri{
 			ExecutionId:         sess.RequestedUrl.ExecutionId,
 			DiscoveredTimeStamp: ptypes.TimestampNow(),
-			Uri:                 l,
+			Uri:                 uri,
 			DiscoveryPath:       sess.Requests.RootRequest().CrawlLog.DiscoveryPath + "L",
 			Referrer:            sess.Requests.RootRequest().Url,
 			Cookies:             cookies,
 			JobExecutionId:      sess.RequestedUrl.JobExecutionId,
 		}
-		outlinks[i] = outlink
-		i++
+		outlinks = append(outlinks, outlink)
 	}
+
 	return outlinks
 }
 
