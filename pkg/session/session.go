@@ -75,6 +75,7 @@ type Session struct {
 	currentLoading    int32
 	frameWg           *syncx.WaitGroup
 	loadCancel        func()
+	onLoadWg          *syncx.WaitGroup
 	netActivityTimer  *syncx.CompletionTimer
 	timer             *syncx.CompletionTimer
 	RequestedUrl      *frontierV1.QueuedUri
@@ -221,8 +222,6 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	ctx, cancel := chromedp.NewContext(allocatorContext)
 	defer cancel()
 	sess.ctx = ctx
-	sess.frameWg = syncx.NewWaitGroup(sess.ctx)
-	sess.Requests = requests.NewRegistry(sess.ctx, sess.frameWg)
 
 	// ensure the first tab is created
 	var userAgent string
@@ -234,6 +233,15 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	); err != nil {
 		return nil, err
 	}
+
+	var loadCtx context.Context
+	loadCtx, sess.loadCancel = context.WithTimeout(sess.ctx, maxTotalTime)
+
+	sess.onLoadWg = syncx.NewWaitGroup(loadCtx)
+	sess.onLoadWg.Add(1)
+
+	sess.frameWg = syncx.NewWaitGroup(sess.ctx)
+	sess.Requests = requests.NewRegistry(sess.ctx, sess.frameWg)
 
 	sess.initListeners()
 
@@ -273,8 +281,6 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	}
 
 	// Navigate
-	var loadCtx context.Context
-	loadCtx, sess.loadCancel = context.WithTimeout(sess.ctx, maxTotalTime)
 	fetchStart := time.Now()
 	if err := chromedp.Run(loadCtx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
@@ -291,6 +297,16 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		}
 	}
 
+	// wait for load event
+	err = sess.onLoadWg.Wait()
+	if err != nil {
+		if err == context.DeadlineExceeded {
+			return nil, errors.New(-5004, "Runtime exceeded", "Waiting for load event. Url: "+sess.RequestedUrl.Uri)
+		} else {
+			return nil, fmt.Errorf("waiting for load event: %w", err)
+		}
+	}
+	// wait for activity to settle after load event
 	_ = sess.netActivityTimer.WaitForCompletion()
 	sess.netActivityTimer.Reset()
 
@@ -332,7 +348,7 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 			crawlLogCount++
 			bytesDownloaded += r.CrawlLog.Size
 		} else {
-			log.Debugf("Skipping write of %v %v %v, From cache %v, Has CrawlLog: %v", r.RequestId, r.Method, r.Url, r.FromCache, r.CrawlLog != nil)
+			log.Tracef("Skipping write of %v %v %v, From cache %v, Has CrawlLog: %v", r.RequestId, r.Method, r.Url, r.FromCache, r.CrawlLog != nil)
 		}
 
 		if r.CrawlLog != nil {

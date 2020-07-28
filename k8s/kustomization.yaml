@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: veidemann
+
+commonLabels:
+  app.kubernetes.io/instance: veidemann-harvester
+  app.kubernetes.io/part-of: veidemann
+
+resources:
+  - github.com/nlnwa/veidemann/bases/veidemann-harvester
+
+patchesStrategicMerge:
+  - deployment_patch.yaml
+
+secretGenerator:
+  - name: veidemann-rethinkdb-env
+    literals:
+      - DB_USER=admin
+      - DB_PASSWORD=rethinkdb
+  - name: veidemann-cache
+    type: Opaque
+    files:
+      - cert/cache-selfsigned.key
+      - cert/cache-selfsignedCA.crt
+      - cert/ec.param
