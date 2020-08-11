@@ -18,6 +18,7 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -29,16 +30,16 @@ import (
 
 var once sync.Once
 
-// MetricsServer is the Prometheus metrics endpoint for the Browser Controller
-type MetricsServer struct {
+// Server is the Prometheus metrics endpoint for the Browser Controller
+type Server struct {
 	addr   string
 	path   string
 	server *http.Server
 }
 
-// NewMetricsServer returns a new instance of MetricsServer listening on the given port
-func NewMetricsServer(listenInterface string, listenPort int, path string) *MetricsServer {
-	a := &MetricsServer{
+// NewServer returns a new instance of Server listening on the given port
+func NewServer(listenInterface string, listenPort int, path string) *Server {
+	a := &Server{
 		addr: fmt.Sprintf("%s:%d", listenInterface, listenPort),
 		path: path,
 	}
@@ -57,7 +58,7 @@ func NewMetricsServer(listenInterface string, listenPort int, path string) *Metr
 	return a
 }
 
-func (a *MetricsServer) Start() error {
+func (a *Server) Start() error {
 	router := http.NewServeMux()
 	router.Handle(a.path, promhttp.Handler())
 
@@ -69,20 +70,19 @@ func (a *MetricsServer) Start() error {
 		IdleTimeout:  5 * time.Second,
 	}
 
-	go func() {
-		log.Infof("Metrics server listening on address: %s", a.addr)
-		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Could not listen on %s: %v\n", a.addr, err)
-		}
-		log.Println("Server stopped")
-	}()
+
+	log.Infof("Metrics server listening on %s", a.addr)
+	err := a.server.ListenAndServe()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("failed to listen on %s: %w", a.addr, err)
+	}
 	return nil
 }
 
-func (a *MetricsServer) Close() {
+func (a *Server) Close() {
 	log.Infof("Shutting down Metrics server")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	a.server.SetKeepAlivesEnabled(false)
-	a.server.Shutdown(ctx)
+	_ = a.server.Shutdown(ctx)
 }
