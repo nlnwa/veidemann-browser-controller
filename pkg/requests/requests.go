@@ -17,7 +17,6 @@
 package requests
 
 import (
-	"context"
 	"github.com/nlnwa/veidemann-api-go/frontier/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/syncx"
 	log "github.com/sirupsen/logrus"
@@ -39,7 +38,6 @@ type RequestRegistry interface {
 }
 
 type requestRegistry struct {
-	ctx         context.Context
 	done        *syncx.WaitGroup
 	mu          sync.Mutex
 	requests    []*Request
@@ -54,9 +52,8 @@ func (r *requestRegistry) RootRequest() *Request {
 	return r.rootRequest
 }
 
-func NewRegistry(ctx context.Context, done *syncx.WaitGroup) RequestRegistry {
+func NewRegistry(done *syncx.WaitGroup) RequestRegistry {
 	r := &requestRegistry{
-		ctx:  ctx,
 		done: done,
 	}
 
