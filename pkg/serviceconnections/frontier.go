@@ -18,7 +18,6 @@ package serviceconnections
 
 import (
 	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
-	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
 
@@ -48,13 +47,14 @@ func (c *FrontierConn) Connect() error {
 		return err
 	}
 	c.client = frontierV1.NewFrontierClient(c.clientConn)
-	log.Infof("Connected to frontier")
 
 	return nil
 }
 
 func (c *FrontierConn) Close() {
-	_ = c.clientConn.Close()
+	if c.clientConn != nil {
+		_ = c.clientConn.Close()
+	}
 }
 
 func (c *FrontierConn) Client() frontierV1.FrontierClient {
