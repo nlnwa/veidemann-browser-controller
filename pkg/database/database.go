@@ -22,10 +22,12 @@ import (
 	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
 	log "github.com/sirupsen/logrus"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
+	"time"
 )
 
 type DbConnection interface {
 	Connect() error
+	Close() error
 	GetConfig(ref *configV1.ConfigRef) (*configV1.ConfigObject, error)
 	GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error)
 	GetSeedByUri(qUri *frontierV1.QueuedUri) (*configV1.ConfigObject, error)
@@ -48,23 +50,29 @@ func NewConnection(dbHost string, dbPort int, dbUser string, dbPassword string, 
 			Password:   dbPassword,
 			Database:   dbName,
 			NumRetries: 10,
+			Timeout:    10 * time.Second,
 		},
 	}
 	return c
 }
 
-// connect establishes connections
+// Connect establishes connections
 func (c *connection) Connect() error {
+	log.Infof("Connecting to RethinkDB at %s", c.dbConnectOpts.Address)
+	var err error
 	// Set up database connection
-	dbSession, err := r.Connect(c.dbConnectOpts)
+	c.dbSession, err = r.Connect(c.dbConnectOpts)
 	if err != nil {
-		log.Errorf("fail to connect to database: %v", err)
-		return err
+		return fmt.Errorf("failed to connect to RethinkDB: %w", err)
 	}
-	c.dbSession = dbSession
 
-	log.Infof("Recorder Proxy is using DB at: %s", c.dbConnectOpts.Address)
+	log.Info("Connected to RethinkDB")
 	return nil
+}
+
+// Close closes the connection
+func (c *connection) Close() error {
+	return c.dbSession.(*r.Session).Close()
 }
 
 func (c *connection) GetConfig(ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
