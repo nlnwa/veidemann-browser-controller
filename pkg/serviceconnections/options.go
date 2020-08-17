@@ -75,8 +75,6 @@ func defaultConnectionOptions(serviceName string) connectionOptions {
 }
 
 func (opts *connectionOptions) connectService() (*grpc.ClientConn, error) {
-	log.Infof("Connecting to %s at %s", opts.serviceName, opts.Addr())
-
 	dialOpts := append(opts.dialOptions,
 		grpc.WithInsecure(),
 		grpc.WithBlock(),
@@ -87,11 +85,12 @@ func (opts *connectionOptions) connectService() (*grpc.ClientConn, error) {
 	clientConn, err := grpc.DialContext(dialCtx, opts.Addr(), dialOpts...)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("failed to connect to %s within %s: %s", opts.serviceName, opts.connectTimeout, err)
+			return nil, fmt.Errorf("failed to connect to %s at %s within %s: %s", opts.serviceName, opts.Addr(),
+				opts.connectTimeout, err)
 		}
 		return nil, err
 	}
-	log.Infof("Connected to %s", opts.serviceName)
+	log.Infof("Connected to %s at %s", opts.serviceName, opts.Addr())
 	return clientConn, nil
 }
 

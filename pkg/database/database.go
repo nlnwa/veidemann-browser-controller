@@ -58,15 +58,14 @@ func NewConnection(dbHost string, dbPort int, dbUser string, dbPassword string, 
 
 // Connect establishes connections
 func (c *connection) Connect() error {
-	log.Infof("Connecting to RethinkDB at %s", c.dbConnectOpts.Address)
 	var err error
 	// Set up database connection
 	c.dbSession, err = r.Connect(c.dbConnectOpts)
 	if err != nil {
-		return fmt.Errorf("failed to connect to RethinkDB: %w", err)
+		return fmt.Errorf("failed to connect to RethinkDB at %s: %w", c.dbConnectOpts.Address, err)
 	}
 
-	log.Info("Connected to RethinkDB")
+	log.Infof("Connected to RethinkDB at %s", c.dbConnectOpts.Address)
 	return nil
 }
 
