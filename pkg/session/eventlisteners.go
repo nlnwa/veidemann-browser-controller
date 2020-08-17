@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 National Library of Norway.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package session
 
 import (
@@ -16,8 +32,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (sess *Session) initListeners() {
-	chromedp.ListenTarget(sess.ctx, sess.listenFunc(sess.ctx))
+func (sess *Session) initListeners(ctx context.Context) {
+	chromedp.ListenTarget(ctx, sess.listenFunc(ctx))
 }
 
 func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
@@ -30,13 +46,16 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 			}
 		case *runtime.EventExecutionContextCreated:
 			sess.ecd = append(sess.ecd, ev.Context)
-			if log.IsLevelEnabled(log.DebugLevel) {
+			if log.IsLevelEnabled(log.TraceLevel) {
 				var auxData interface{}
 				err := json.Unmarshal(ev.Context.AuxData, &auxData)
 				if err == nil {
-					log.Debugf("execution context created (%d): %s %s %+v", ev.Context.ID, ev.Context.Origin, ev.Context.Name, auxData)
+					log.Tracef("execution context created (%d): %s %s %+v", ev.Context.ID, ev.Context.Origin, ev.Context.Name, auxData)
 				}
 			}
+		case *page.EventLoadEventFired:
+			log.Trace("Load event fired")
+			sess.onLoad <- struct{}{}
 		case *network.EventLoadingFailed:
 			log.Debugf("Loading failed: %v, %v, Reason; %v, Cancel: %v, %v, %v", ev.RequestID, ev.Type, ev.BlockedReason, ev.Canceled, ev.ErrorText, ev.Timestamp.Time())
 		case *page.EventFrameStartedLoading:
@@ -50,7 +69,7 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 		case *page.EventDownloadWillBegin:
 			log.Tracef("Download will begin: %v %v", ev.FrameID, ev.URL)
 		case *page.EventJavascriptDialogOpening:
-			log.Debugf("javascript dialog opening %v", ev.Message)
+			log.Debugf("Javascript dialog opening %v", ev.Message)
 			go func() {
 				accept := false
 				if ev.Type == "alert" {
@@ -117,7 +136,7 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 			}()
 			err := sess.Notify(ev.TargetInfo.TargetID.String())
 			if err != nil {
-				log.Error(err)
+				log.Errorf("Failed to notify session of new target: %v", err)
 			}
 		case *fetch.EventRequestPaused:
 			go func() {
@@ -154,7 +173,7 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 				} else {
 					err = sess.Notify(ev.RequestID.String())
 					if err != nil {
-						log.Error(err)
+						log.Errorf("Failed to notify session after request continuation: %v", err)
 					}
 				}
 			}()

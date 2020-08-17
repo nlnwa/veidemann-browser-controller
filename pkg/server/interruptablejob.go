@@ -18,14 +18,18 @@ package server
 
 import (
 	"context"
-	"github.com/nlnwa/veidemann-api-go/browsercontroller/v1"
+	browsercontrollerV1 "github.com/nlnwa/veidemann-api-go/browsercontroller/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"time"
 )
 
-func Run(ctx context.Context, fn func() (*browsercontroller.DoRequest, error)) (*browsercontroller.DoRequest, error) {
-	var result *browsercontroller.DoRequest
+func Send(fn func(*browsercontrollerV1.DoReply) error, reply *browsercontrollerV1.DoReply) error {
+	return DoWithTimeout(func() error { return fn(reply) }, 5*time.Second)
+}
+
+func Recv(ctx context.Context, fn func() (*browsercontrollerV1.DoRequest, error)) (*browsercontrollerV1.DoRequest, error) {
+	var result *browsercontrollerV1.DoRequest
 	var err error
 	done := make(chan interface{})
 

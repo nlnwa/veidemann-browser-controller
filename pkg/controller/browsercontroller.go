@@ -18,72 +18,40 @@ package controller
 
 import (
 	"context"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/server"
+	"fmt"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/harvester"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	log "github.com/sirupsen/logrus"
+	"time"
 )
 
 type BrowserController struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	opts        browserControllerOptions
-	sessions    *session.SessionRegistry
-	waitRunning chan struct{}
+	sessions  *session.Registry
+	harvester harvester.Harvester
 }
 
-func New(opts ...BrowserControllerOption) *BrowserController {
-	bc := &BrowserController{
-		opts: defaultBrowserControllerOptions(),
+func New(sessions *session.Registry, harvester harvester.Harvester) *BrowserController {
+	return &BrowserController{
+		sessions:  sessions,
+		harvester: harvester,
 	}
-	for _, opt := range opts {
-		opt.apply(&bc.opts)
-	}
-	bc.waitRunning = make(chan struct{})
-	return bc
 }
 
-func (bc *BrowserController) Start() {
-	log.Infof("Starting Browser Controller ...")
-
-	bc.ctx, bc.cancel = context.WithCancel(context.Background())
-
-	bc.opts.sessionOpts = append(bc.opts.sessionOpts,
-		session.WithIsAllowedByRobotsTxtFunc(bc.funcIsAllowed),
-		session.WithWriteScreenshotFunc(bc.writeScreenshot))
-	bc.sessions = session.NewSessionRegistry(
-		bc.ctx,
-		bc.opts.maxSessions,
-		bc.opts.sessionOpts...,
-	)
-
-	apiServer := server.NewApiServer(bc.opts.listenInterface, bc.opts.listenPort, bc.sessions)
-	apiServer.Start()
-
-	waitc := make(chan struct{})
-
-	go func() {
-		for {
-			sess, err := bc.sessions.GetNextAvailable()
-			if err != nil {
-				close(waitc)
-				return
-			}
-			go bc.Harvest(bc.ctx, sess)
+func (bc *BrowserController) Run(ctx context.Context) error {
+	for {
+		sess, err := bc.sessions.GetNextAvailable(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get session: %w", err)
 		}
-	}()
-
-	log.Infof("Browser Controller started")
-
-	<-waitc
-	log.Debugf("Stop requested. Waiting for %v remaining sessions", bc.sessions.CurrentSessions())
-	bc.sessions.CloseWait(bc.opts.closeTimeout)
-	apiServer.Close()
-	close(bc.waitRunning)
-}
-
-func (bc *BrowserController) Stop() {
-	log.Infof("Stopping Browser Controller ...")
-	bc.cancel()
-	<-bc.waitRunning
-	log.Infof("Browser Controller stopped")
+		go func() {
+			err := bc.harvester.Harvest(ctx, sess.Fetch)
+			if err != nil {
+				log.Warnf("Harvest completed with error: %v", err)
+				<-time.After(time.Second)
+			}
+			if sess != nil {
+				bc.sessions.Release(sess)
+			}
+		}()
+	}
 }

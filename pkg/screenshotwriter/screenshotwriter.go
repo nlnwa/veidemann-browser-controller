@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package controller
+package screenshotwriter
 
 import (
 	"context"
@@ -22,14 +22,34 @@ import (
 	"fmt"
 	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 	contentwriterV1 "github.com/nlnwa/veidemann-api-go/contentwriter/v1"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
+	"github.com/nlnwa/veidemann-api-go/frontier/v1"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	log "github.com/sirupsen/logrus"
 )
 
-func (bc *BrowserController) writeScreenshot(ctx context.Context, sess *session.Session, data []byte) error {
-	stream, err := bc.opts.contentWriterConn.Client().Write(ctx)
+type Metadata struct {
+	CrawlConfig    *configV1.CrawlConfig
+	CrawlLog       *frontier.CrawlLog
+	BrowserConfig  *configV1.BrowserConfig
+	BrowserVersion string
+}
+
+type ScreenshotWriter interface {
+	Write(context.Context, []byte, Metadata) error
+}
+
+type screenshotWriter struct {
+	conn *serviceconnections.ContentWriterConn
+}
+
+func New(conn *serviceconnections.ContentWriterConn) ScreenshotWriter {
+	return &screenshotWriter{conn}
+}
+
+func (c *screenshotWriter) Write(ctx context.Context, data []byte, metadata Metadata) error {
+	stream, err := c.conn.Client().Write(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to open Frontier session: %w", err)
+		return fmt.Errorf("failed to open ContentWriter session: %w", err)
 	}
 
 	h := sha1.New()
@@ -43,15 +63,13 @@ func (bc *BrowserController) writeScreenshot(ctx context.Context, sess *session.
 	if err = stream.Send(&contentwriterV1.WriteRequest{Value: d}); err != nil {
 		return err
 	}
-	cl := sess.Requests.RootRequest().CrawlLog
-	browserConfig := sess.BrowserConfig
 
 	screenshotMetaRecord := fmt.Sprintf(
 		"browserVersion: %s\r\nwindowHeight: %d\r\nwindowWidth: %d\r\nuserAgent: %s\r\n",
-		sess.BrowserVersion,
-		browserConfig.GetWindowHeight(),
-		browserConfig.GetWindowWidth(),
-		browserConfig.GetUserAgent())
+		metadata.BrowserVersion,
+		metadata.BrowserConfig.GetWindowHeight(),
+		metadata.BrowserConfig.GetWindowWidth(),
+		metadata.BrowserConfig.GetUserAgent())
 	d = &contentwriterV1.WriteRequest_Payload{Payload: &contentwriterV1.Data{
 		RecordNum: 1,
 		Data:      []byte(screenshotMetaRecord),
@@ -71,7 +89,7 @@ func (bc *BrowserController) writeScreenshot(ctx context.Context, sess *session.
 		BlockDigest:       digest,
 		Size:              int64(len(data)),
 		SubCollection:     configV1.Collection_SCREENSHOT,
-		WarcConcurrentTo:  []string{cl.WarcId},
+		WarcConcurrentTo:  []string{metadata.CrawlLog.WarcId},
 	}
 	screenshotMetaRecordMeta := &contentwriterV1.WriteRequestMeta_RecordMeta{
 		RecordNum:         1,
@@ -80,25 +98,25 @@ func (bc *BrowserController) writeScreenshot(ctx context.Context, sess *session.
 		BlockDigest:       screenshotMetaRecordDigest,
 		Size:              int64(len(screenshotMetaRecord)),
 		SubCollection:     configV1.Collection_SCREENSHOT,
-		WarcConcurrentTo:  []string{cl.WarcId},
+		WarcConcurrentTo:  []string{metadata.CrawlLog.WarcId},
 	}
 
-	ip := cl.IpAddress
+	ip := metadata.CrawlLog.IpAddress
 	if ip == "" {
 		log.Errorf("Missing IP address for screenshot, using 127.0.0.1")
 		ip = "127.0.0.1"
 	}
 
 	meta := &contentwriterV1.WriteRequest_Meta{Meta: &contentwriterV1.WriteRequestMeta{
-		ExecutionId: cl.ExecutionId,
-		TargetUri:   cl.RequestedUri,
+		ExecutionId: metadata.CrawlLog.ExecutionId,
+		TargetUri:   metadata.CrawlLog.RequestedUri,
 		RecordMeta: map[int32]*contentwriterV1.WriteRequestMeta_RecordMeta{
 			0: screenshotRecordMeta,
 			1: screenshotMetaRecordMeta,
 		},
-		FetchTimeStamp: cl.FetchTimeStamp,
+		FetchTimeStamp: metadata.CrawlLog.FetchTimeStamp,
 		IpAddress:      ip,
-		CollectionRef:  sess.CrawlConfig.CollectionRef,
+		CollectionRef:  metadata.CrawlConfig.GetCollectionRef(),
 	}}
 	if err = stream.Send(&contentwriterV1.WriteRequest{Value: meta}); err != nil {
 		return err

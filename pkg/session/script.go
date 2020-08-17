@@ -17,14 +17,11 @@
 package session
 
 import (
-	commonsV1 "github.com/nlnwa/veidemann-api-go/commons/v1"
-	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
+	"github.com/mailru/easyjson"
 )
 
-type RenderResult struct {
-	BytesDownloaded int64
-	UriCount        int32
-	Outlinks        []*frontierV1.QueuedUri
-	Error           *commonsV1.Error
-	PageFetchTimeMs int64
+type ReturnValue struct {
+	WaitForData bool            `json:"waitForData,omitempty"`
+	Next        string          `json:"next,omitempty"`
+	Data        easyjson.RawMessage `json:"data,omitempty"`
 }

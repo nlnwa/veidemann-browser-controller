@@ -1,13 +1,28 @@
+/*
+ * Copyright 2020 National Library of Norway.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package server
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
-	"github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/robotsevaluator"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	"github.com/nlnwa/veidemann-recorderproxy/recorderproxy"
 	"github.com/nlnwa/veidemann-recorderproxy/serviceconnections"
@@ -15,7 +30,6 @@ import (
 	"github.com/ory/dockertest"
 	log "github.com/sirupsen/logrus"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -24,45 +38,37 @@ import (
 	"time"
 )
 
-var sessions *session.SessionRegistry
+var sessions *session.Registry
 
 var localhost = GetOutboundIP().String()
 
 func TestMain(m *testing.M) {
-	log.SetLevel(log.WarnLevel)
+	log.SetLevel(log.DebugLevel)
 
 	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
 	pool, err := dockertest.NewPool("")
 	if err != nil {
 		log.Fatalf("Could not connect to docker: %s", err)
 	}
-
 	browserContainer, browserPort := setupBrowser(pool)
 
-	dbAdapter := setupDbMock()
-	sessions = session.NewSessionRegistry(
-		context.Background(),
+	dbMock := setupDbMock()
+	dbAdapter := database.NewDbAdapter(dbMock, time.Minute)
+	screenShotWriter := screenshotwriter.NewMock()
+	sessions = session.NewRegistry(
 		2,
 		session.WithBrowserPort(browserPort),
 		session.WithProxyHost(localhost),
 		session.WithProxyPort(6666),
 		session.WithDbAdapter(dbAdapter),
-		session.WithIsAllowedByRobotsTxtFunc(func(ctx context.Context, request *robotsevaluator.IsAllowedRequest) bool {
-			return true
-		}),
-		session.WithWriteScreenshotFunc(func(ctx context.Context, sess *session.Session, data []byte) error {
-			b := bytes.NewBuffer(data)
-			f, e := os.Create("screenshot.png")
-			if e != nil {
-				log.Fatal("Error opening file %w", e)
-			}
-			defer f.Close()
-			io.Copy(f, b)
-			return nil
-		}),
+		session.WithScreenshotWriter(screenShotWriter),
 	)
-	apiServer := NewApiServer("", 7777, sessions)
-	fmt.Printf("Start API server %v\n", apiServer.Start())
+
+	robotsEvaluator := robotsevaluator.NewMock(true)
+	apiServer := NewApiServer("", 7777, sessions, robotsEvaluator)
+	go func() {
+		_ = apiServer.Start()
+	}()
 
 	// Setup recorder proxy
 	opt := testutil.WithExternalBrowserController(serviceconnections.NewConnectionOptions("BrowserController",
@@ -79,19 +85,18 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	// Clean up
-	// You can't defer this because os.Exit doesn't care for defer
+	sessions.CloseWait(1 * time.Minute)
 	if err := pool.Purge(browserContainer); err != nil {
-		log.Fatalf("Could not purge browserContainer: %s", err)
+		log.Warnf("Could not purge browserContainer: %s", err)
 	}
 	apiServer.Close()
 	grpcServices.Close()
 	recorderProxy0.Close()
 	recorderProxy1.Close()
 	recorderProxy2.Close()
+	screenShotWriter.Close()
+	_ = dbMock.Close()
 
-	os.Remove("screenshot.png")
-	os.Remove("crawl.log")
-	os.Remove("page.log")
 	os.Exit(code)
 }
 
@@ -125,28 +130,26 @@ func TestSession_Fetch(t *testing.T) {
 		{"pdf2", &frontierV1.QueuedUri{Uri: "http://publikasjoner.nve.no/rapport/2015/rapport2015_89.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 	}
 	for _, tt := range tests {
+		ctx := context.Background()
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := sessions.GetNextAvailable()
+			s, err := sessions.GetNextAvailable(ctx)
 			if err != nil {
 				t.Error(err)
 			}
 			result, err := s.Fetch(tt.url, conf)
 			if err != nil {
 				t.Error(err)
+			} else {
+				t.Logf("Resource count: %v, Time: %v\n", result.UriCount, result.PageFetchTimeMs)
 			}
-			fmt.Printf("Resource count: %v, Time: %v\n", result.UriCount, result.PageFetchTimeMs)
-			//result, err := s.Fetch(tt.url, conf)
-			//fmt.Printf("Err: %v\n", err)
-			//b, _ := json.Marshal(result)
-			//fmt.Printf("Result: %s\n", b)
 			sessions.Release(s)
 			//time.Sleep(time.Second*4)
 		})
 	}
 }
 
-func setupDbMock() *database.DbAdapter {
-	dbConn := database.NewMock()
+func setupDbMock() *database.MockConnection {
+	dbConn := database.NewMockConnection().(*database.MockConnection)
 	dbConn.GetMock().On(r.Table("config").Get("browserConfig1")).Return(
 		map[string]interface{}{
 			"id":   "browserConfig1",
@@ -176,6 +179,7 @@ func setupDbMock() *database.DbAdapter {
 				"label":       []map[string]interface{}{{"key": "type", "value": "extract_outlinks"}},
 			},
 			"browserScript": map[string]interface{}{
+				"type": "EXTRACT_OUTLINKS",
 				"script": `var __brzl_framesDone = new Set();
 var __brzl_compileOutlinks = function (frame) {
     __brzl_framesDone.add(frame);
@@ -211,7 +215,7 @@ __brzl_compileOutlinks(window).join('\\n');`,
 	dbConn.GetMock().On(r.Table("page_log").Insert(r.MockAnything())).Return(map[string]interface{}{}, nil)
 	dbConn.GetMock().On(r.Table("crawl_log").Insert(r.MockAnything())).Return(map[string]interface{}{}, nil)
 
-	return database.NewDbAdapter(dbConn, time.Minute)
+	return dbConn
 }
 
 // localRecorderProxy creates a new recorderproxy which uses internal transport
@@ -227,7 +231,9 @@ func GetOutboundIP() net.IP {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer conn.Close()
+	defer func () {
+		_ = conn.Close()
+	}()
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	return localAddr.IP

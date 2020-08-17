@@ -67,8 +67,8 @@ func (sr *Registry) GetNextAvailable(ctx context.Context) (*Session, error) {
 	return sess, nil
 }
 
-func (sr *Registry) NewDirectSession(ctx context.Context, uri, crawlExecutionId, jobExecutionId string) (*Session, error) {
-	return newDirectSession(ctx, uri, crawlExecutionId, jobExecutionId, sr.opts...)
+func (sr *Registry) NewDirectSession(uri, crawlExecutionId, jobExecutionId string) (*Session, error) {
+	return newDirectSession(uri, crawlExecutionId, jobExecutionId, sr.opts...)
 }
 
 func (sr *Registry) Get(sessId int) *Session {
