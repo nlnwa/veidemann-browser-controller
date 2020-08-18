@@ -78,10 +78,10 @@ func NewFrontierMock(requestPageFunc RequestPageFunc, errorFunc ErrorFunc, metri
 	return m
 }
 
-func (s *FrontierMock) Close() {
-	s.ClientConn.Close()
-	s.Server.GracefulStop()
-	s.lis.Close()
+func (m *FrontierMock) Close() {
+	m.ClientConn.Close()
+	m.Server.GracefulStop()
+	_ = m.lis.Close()
 }
 
 func (m *FrontierMock) BufDialerOption() grpc.DialOption {

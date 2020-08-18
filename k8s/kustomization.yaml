@@ -10,14 +10,22 @@ resources:
   - github.com/nlnwa/veidemann/bases/veidemann-harvester
 
 patchesStrategicMerge:
-  - deployment_patch.yaml
+  - deployment_log_level_patch.yaml
+
+patchesJson6902:
+  - target:
+      kind: Deployment
+      name: veidemann-harvester
+      version: v1
+      group: apps
+    path: deployment_secret_patch.yaml
 
 secretGenerator:
-  - name: veidemann-rethinkdb-env
+  - name: skaffold-browser-controller-rethinkdb-env
     literals:
       - DB_USER=admin
       - DB_PASSWORD=rethinkdb
-  - name: veidemann-cache
+  - name: skaffold-browser-controller-veidemann-cache
     type: Opaque
     files:
       - cert/cache-selfsigned.key

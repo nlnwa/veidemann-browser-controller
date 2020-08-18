@@ -35,10 +35,11 @@ import (
 	"github.com/mailru/easyjson"
 	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
-	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/errors"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/harvester"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/requests"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/syncx"
 	"github.com/nlnwa/whatwg-url/url"
 	log "github.com/sirupsen/logrus"
@@ -51,12 +52,6 @@ import (
 	"strings"
 	"time"
 )
-
-type ReturnValue struct {
-	WaitForData bool            `json:"waitForData,omitempty"`
-	Next        string          `json:"next,omitempty"`
-	Data        json.RawMessage `json:"data,omitempty"`
-}
 
 type Session struct {
 	Id                int
@@ -75,7 +70,7 @@ type Session struct {
 	currentLoading    int32
 	frameWg           *syncx.WaitGroup
 	loadCancel        func()
-	onLoadWg          *syncx.WaitGroup
+	onLoad            chan struct{}
 	netActivityTimer  *syncx.CompletionTimer
 	timer             *syncx.CompletionTimer
 	RequestedUrl      *frontierV1.QueuedUri
@@ -83,20 +78,26 @@ type Session struct {
 	BrowserConfig     *configV1.BrowserConfig
 	PolitenessConfig  *configV1.ConfigObject
 	DbAdapter         *database.DbAdapter
-	Fetch             func(QUri *frontierV1.QueuedUri, crawlConfig *configV1.ConfigObject) (*RenderResult, error)
-	RobotsIsAllowed   func(ctx context.Context, request *robotsevaluatorV1.IsAllowedRequest) bool
+	screenShotWriter  screenshotwriter.ScreenshotWriter
 	WriteScreenshot   func(ctx context.Context, sess *Session, data []byte) error
-
-	// Temporary workaround until we have proper configuration
-	scrollPages int
 }
 
-func New(sessionId int, opts ...SessionOption) (*Session, error) {
-	s := defaultSessionOptions()
-	s.Id = sessionId
+func newDefaultSession(opts ...Option) *Session {
+	s := &Session{
+		browserHost:    "localhost",
+		browserPort:    3000,
+		browserTimeout: 500 * 1000,
+		proxyPort:      3000,
+	}
 	for _, opt := range opts {
 		opt.apply(s)
 	}
+	return s
+}
+
+func New(sessionId int, opts ...Option) (*Session, error) {
+	s := newDefaultSession(opts...)
+	s.Id = sessionId
 
 	ws, err := url.Parse("ws://" + s.browserHost + ":" + strconv.Itoa(s.browserPort))
 	if err != nil {
@@ -120,17 +121,15 @@ func New(sessionId int, opts ...SessionOption) (*Session, error) {
 	}
 	s.workspaceEndpoint = work.String()
 
-	log.Debugf("New session. Id: %d, CDP endpoint: %v", s.Id, s.browserWsEndpoint)
+	log.WithField("id", s.Id).
+		WithField("cdp", s.browserWsEndpoint).
+		Debugf("New session")
 	return s, nil
 }
 
-func newDirectSession(ctx context.Context, uri, crawlExecutionId, jobExecutionId string, opts ...SessionOption) (*Session, error) {
-	sess := defaultSessionOptions()
+func newDirectSession(uri, crawlExecutionId, jobExecutionId string, opts ...Option) (*Session, error) {
+	sess := newDefaultSession(opts...)
 	sess.Id = 0
-	for _, opt := range opts {
-		opt.apply(sess)
-	}
-	sess.ctx, _ = context.WithTimeout(ctx, 10*time.Second)
 
 	QUri := &frontierV1.QueuedUri{
 		Uri:            uri,
@@ -140,7 +139,9 @@ func newDirectSession(ctx context.Context, uri, crawlExecutionId, jobExecutionId
 	log.WithField("eid", QUri.ExecutionId).Infof("Start fetch of %v", QUri.Uri)
 	sess.RequestedUrl = QUri
 
-	log.Tracef("New direct session. Id: %d, %v", sess.Id, sess.UserAgent)
+	log.WithField("id", sess.Id).
+		WithField("userAgent", sess.UserAgent).
+		Debugf("New direct session")
 	return sess, nil
 }
 
@@ -166,15 +167,7 @@ func (sess *Session) Context() context.Context {
 	return sess.ctx
 }
 
-func (sess *Session) Done() <-chan struct{} {
-	if sess.ctx != nil {
-		return sess.ctx.Done()
-	} else {
-		return nil
-	}
-}
-
-func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.ConfigObject) (result *RenderResult, err error) {
+func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.ConfigObject) (result *harvester.RenderResult, err error) {
 	// Ensure that bugs in implementation is logged and handled
 	defer func() {
 		if r := recover(); r != nil {
@@ -203,13 +196,13 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 
 	bConf, err := sess.DbAdapter.GetConfigObject(sess.CrawlConfig.BrowserConfigRef)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get browser config: %v", err)
 	}
 	sess.BrowserConfig = bConf.GetBrowserConfig()
 
 	sess.PolitenessConfig, err = sess.DbAdapter.GetConfigObject(sess.CrawlConfig.PolitenessRef)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get politeness config: %v", err)
 	}
 
 	maxTotalTime := time.Duration(sess.BrowserConfig.PageLoadTimeoutMs) * time.Millisecond
@@ -236,14 +229,13 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 
 	var loadCtx context.Context
 	loadCtx, sess.loadCancel = context.WithTimeout(sess.ctx, maxTotalTime)
+	defer sess.loadCancel()
 
-	sess.onLoadWg = syncx.NewWaitGroup(loadCtx)
-	sess.onLoadWg.Add(1)
+	sess.onLoad = make(chan struct{})
+	sess.frameWg = syncx.NewWaitGroup(loadCtx)
+	sess.Requests = requests.NewRegistry(sess.frameWg)
 
-	sess.frameWg = syncx.NewWaitGroup(sess.ctx)
-	sess.Requests = requests.NewRegistry(sess.ctx, sess.frameWg)
-
-	sess.initListeners()
+	sess.initListeners(ctx)
 
 	sess.netActivityTimer = syncx.NewCompletionTimer(1*time.Second, maxTotalTime, nil)
 	sess.timer = syncx.NewCompletionTimer(maxIdleTime, maxTotalTime, sess.Requests.MatchCrawlLogs)
@@ -297,23 +289,26 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		}
 	}
 
-	// wait for load event
-	err = sess.onLoadWg.Wait()
-	if err != nil {
-		if err == context.DeadlineExceeded {
-			return nil, errors.New(-5004, "Runtime exceeded", "Waiting for load event. Url: "+sess.RequestedUrl.Uri)
-		} else {
-			return nil, fmt.Errorf("waiting for load event: %w", err)
-		}
-	}
-	// wait for activity to settle after load event
+	// Give scripts a chance to start by waiting for network activity to slow down
 	_ = sess.netActivityTimer.WaitForCompletion()
 	sess.netActivityTimer.Reset()
 
-	sess.executeOnLoadScripts()
+	// Execute on load scripts
+	// if there are no execution contexts created there is no point in executing scripts
+	// eg. PDFs does not create execution contexts and the onload event will never fire
+	if len(sess.ecd) > 0 {
+		select {
+		case <-loadCtx.Done():
+			return nil, errors.New(-5004, "Runtime exceeded", "Pageload timed out waiting for load event. Url: "+sess.RequestedUrl.Uri)
+		// wait for load event
+		case <-sess.onLoad:
+		}
+		// wait for activity to settle after load event
+		_ = sess.netActivityTimer.WaitForCompletion()
+		sess.netActivityTimer.Reset()
 
-	// Give scripts a chance to start by waiting for network activity to slow down
-	_ = sess.netActivityTimer.WaitForCompletion()
+		sess.executeOnLoadScripts(loadCtx)
+	}
 
 	// Wait for frames to finish loading
 	err = sess.frameWg.Wait()
@@ -342,7 +337,7 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	sess.Requests.Walk(func(r *requests.Request) {
 		if r.CrawlLog != nil && r.CrawlLog.WarcId != "" {
 			if err := sess.DbAdapter.WriteCrawlLog(r.CrawlLog); err != nil {
-				log.Errorf("error writing crawlLog: %v", err)
+				log.Errorf("Error writing crawlLog: %v", err)
 				return
 			}
 			crawlLogCount++
@@ -377,8 +372,8 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 
 	qUris := sess.extractOutlinks()
 	outlinks := make([]string, len(qUris))
-	for _, outlink := range qUris {
-		outlinks = append(outlinks, outlink.Uri)
+	for i, qUri := range qUris {
+		outlinks[i] = qUri.Uri
 	}
 
 	err = chromedp.Cancel(ctx)
@@ -407,7 +402,7 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		return nil, fmt.Errorf("missing initial request: %w", err)
 	}
 
-	result = &RenderResult{
+	result = &harvester.RenderResult{
 		BytesDownloaded: bytesDownloaded,
 		UriCount:        crawlLogCount,
 		Outlinks:        qUris,
@@ -420,14 +415,14 @@ func (sess *Session) fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	return result, nil
 }
 
-func (sess *Session) callScript(eci runtime.ExecutionContextID, fn string, arguments json.RawMessage) (easyjson.RawMessage, error) {
+func (sess *Session) callScript(ctx context.Context, eci runtime.ExecutionContextID, fn string, arguments easyjson.RawMessage) (easyjson.RawMessage, error) {
 	var res *runtime.RemoteObject
 	var exceptionDetails *runtime.ExceptionDetails
-	err := chromedp.Run(sess.ctx,
+	err := chromedp.Run(ctx,
 		chromedp.ActionFunc(func(ctx context.Context) (err error) {
 			res, exceptionDetails, err = runtime.
 				CallFunctionOn(fn).
-				WithArguments([]*runtime.CallArgument{{Value: easyjson.RawMessage(arguments)}}).
+				WithArguments([]*runtime.CallArgument{{Value: arguments}}).
 				WithExecutionContextID(eci).
 				WithReturnByValue(true).
 				Do(ctx)
@@ -440,8 +435,8 @@ func (sess *Session) callScript(eci runtime.ExecutionContextID, fn string, argum
 	return res.Value, nil
 }
 
-func (sess *Session) executeOnLoadScripts() {
-	log.Debugf("%v", configV1.BrowserScript_ON_LOAD)
+func (sess *Session) executeOnLoadScripts(ctx context.Context) {
+	log.Tracef("Executing %v scripts", configV1.BrowserScript_ON_LOAD)
 
 	seedAnnotations := sess.DbAdapter.GetSeedByUri(sess.RequestedUrl).GetMeta().GetAnnotation()
 
@@ -467,7 +462,7 @@ func (sess *Session) executeOnLoadScripts() {
 
 		initialArgs, err := json.Marshal(&annotations)
 		if err != nil {
-			log.Errorf("%v", err)
+			log.Errorf("Failed marshal annotations as initial arguments for script: %v", err)
 			continue
 		}
 
@@ -475,22 +470,26 @@ func (sess *Session) executeOnLoadScripts() {
 		// try to pick top level javascript execution context
 		ecdLength := len(sess.ecd)
 		for _, ecd := range sess.ecd {
-			if ecd.Name == "" && strings.HasPrefix(sess.RequestedUrl.Uri, ecd.Origin) {
+			if ecd.Name == "" {
 				eci = ecd.ID
 				break
 			}
 		}
 		if eci == 0 {
 			log.Error("failed to get execution context")
-			continue
+			return
 		}
 
 		// initalize function arguments
-		arguments := json.RawMessage(initialArgs)
+		arguments := easyjson.RawMessage(initialArgs)
 		// name of next script to run (self is current script)
 		next := "self"
 
 		for {
+			select {
+			case <-ctx.Done():
+			default:
+			}
 			var fn string
 			if len(next) == 0 {
 				break
@@ -515,7 +514,7 @@ func (sess *Session) executeOnLoadScripts() {
 				var currentArguments map[string]interface{}
 				err := json.Unmarshal(arguments, &currentArguments)
 				if err != nil {
-					// pass
+					log.Warn("Failed get ")
 				}
 				// add currentArguments
 				for key, value := range currentArguments {
@@ -523,7 +522,7 @@ func (sess *Session) executeOnLoadScripts() {
 				}
 				arguments, err = json.Marshal(annotations)
 				if err != nil {
-					log.Errorf("failed")
+					log.Errorf("Failed to marshal script annotations")
 					break
 				}
 			}
@@ -531,9 +530,9 @@ func (sess *Session) executeOnLoadScripts() {
 				args := make(map[string]interface{})
 				err = json.Unmarshal(arguments, &args)
 				if err != nil {
-					log.Errorf("failed to unmarshal arguments: %v", err)
+					log.Errorf("Failed to unmarshal script arguments: %v", err)
 				} else {
-					log.Debugf("executing %s(%+v) in context %v", next, args, eci)
+					log.Debugf("Executing script %s(%v) in context %v", next, args, eci)
 				}
 			}
 
@@ -542,8 +541,8 @@ func (sess *Session) executeOnLoadScripts() {
 			// we want the next script to run in new root context if created
 			if isUpdateEcu && len(sess.ecd) > ecdLength {
 				for _, ecd := range sess.ecd[ecdLength:] {
-					// use the first new execution context created matching uri
-					if ecd.Name == "" && strings.HasPrefix(sess.RequestedUrl.Uri, ecd.Origin) {
+					// use the first new execution context created
+					if ecd.Name == "" {
 						eci = ecd.ID
 						break
 					}
@@ -551,9 +550,9 @@ func (sess *Session) executeOnLoadScripts() {
 				ecdLength = len(sess.ecd)
 			}
 
-			result, err := sess.callScript(eci, fn, arguments)
+			result, err := sess.callScript(ctx, eci, fn, arguments)
 			if err != nil {
-				log.Errorf("failed to call script: %v", err)
+				log.Errorf("Failed to call script: %v", err)
 				break
 			}
 			if result == nil {
@@ -562,7 +561,7 @@ func (sess *Session) executeOnLoadScripts() {
 			var rv ReturnValue
 			err = json.Unmarshal(result, &rv)
 			if err != nil {
-				log.Errorf("failed to unmarshal return value: %v", err)
+				log.Errorf("Failed to unmarshal return script value: %v", err)
 				break
 			}
 
@@ -570,9 +569,9 @@ func (sess *Session) executeOnLoadScripts() {
 				var d interface{}
 				err = json.Unmarshal(rv.Data, &d)
 				if err != nil {
-					log.Errorf("failed to unmarshal data: %v", err)
+					log.Warnf("Failed to unmarshal script data: %v", err)
 				} else {
-					log.Debugf("return {waitForCompletion: %t, next: %s, data: %+v}", rv.WaitForData, rv.Next, d)
+					log.Debugf("Script returned {waitForCompletion: %t, next: %s, data: %+v}", rv.WaitForData, rv.Next, d)
 				}
 			}
 
@@ -681,7 +680,13 @@ func (sess *Session) saveScreenshot() {
 		log.Errorf("Error capturing screenshot: %v", err)
 		return
 	}
-	if err = sess.WriteScreenshot(sess.ctx, sess, data); err != nil {
+	metadata := screenshotwriter.Metadata{
+		CrawlConfig:    sess.CrawlConfig,
+		CrawlLog:       sess.Requests.RootRequest().CrawlLog,
+		BrowserConfig:  sess.BrowserConfig,
+		BrowserVersion: sess.BrowserVersion,
+	}
+	if err = sess.screenShotWriter.Write(sess.ctx, data, metadata); err != nil {
 		log.Errorf("Error writing screenshot: %v", err)
 		return
 	}
@@ -691,7 +696,6 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 	cookies := sess.extractCookies()
 	var extractedUrls []string
 	for _, s := range sess.DbAdapter.GetScripts(sess.BrowserConfig, configV1.BrowserScript_EXTRACT_OUTLINKS) {
-		log.Debugf("executing link extractor script")
 		var res *runtime.RemoteObject
 		var errDetail *runtime.ExceptionDetails
 		err := chromedp.Run(sess.ctx,
@@ -702,14 +706,14 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 			}),
 		)
 		if err != nil {
-			log.Warnf("evaluate script: %v %v", err, errDetail)
+			log.Warnf("Failed to evaluate link extractor script: %v %v", err, errDetail)
 			continue
 		}
 		if res.Value != nil {
 			var links []string
 			err := json.Unmarshal(res.Value, &links)
 			if err != nil {
-				log.Warnf("unmarshal return value: %v", err)
+				log.Warnf("Failed to unmarshal return value from link extractor script: %v", err)
 				continue
 			}
 
@@ -725,11 +729,10 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 		}
 	}
 
-	outlinks := make([]*frontierV1.QueuedUri, len(extractedUrls))
+	qUris := make([]*frontierV1.QueuedUri, len(extractedUrls))
 
-	for _, uri := range extractedUrls {
-		log.Tracef("Outlink: %v", uri)
-		outlink := &frontierV1.QueuedUri{
+	for i, uri := range extractedUrls {
+		qUris[i] = &frontierV1.QueuedUri{
 			ExecutionId:         sess.RequestedUrl.ExecutionId,
 			DiscoveredTimeStamp: ptypes.TimestampNow(),
 			Uri:                 uri,
@@ -738,10 +741,9 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 			Cookies:             cookies,
 			JobExecutionId:      sess.RequestedUrl.JobExecutionId,
 		}
-		outlinks = append(outlinks, outlink)
 	}
 
-	return outlinks
+	return qUris
 }
 
 func (sess *Session) AbortFetch() {

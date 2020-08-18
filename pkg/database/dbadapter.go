@@ -100,7 +100,7 @@ func (cc *DbAdapter) GetScripts(browserConfig *configV1.BrowserConfig, scriptTyp
 	for _, selector := range browserConfig.ScriptSelector {
 		configs, err := cc.getConfigsForSelector(selector)
 		if err != nil {
-			log.Errorf("%v", err)
+			log.Warnf("Failed to get configs for selector: %s: %v", selector, err)
 			continue
 		}
 		for _, config := range configs {

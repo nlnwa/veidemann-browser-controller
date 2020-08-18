@@ -34,11 +34,15 @@ func (d *dbConnMock) Connect() error {
 	panic("implement me")
 }
 
+func (d *dbConnMock) Close() error {
+	panic("implement me")
+}
+
 func (d *dbConnMock) GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
 	panic("implement me")
 }
 
-func (c *dbConnMock) GetSeedByUri(qUri *frontier.QueuedUri) (*configV1.ConfigObject, error) {
+func (d *dbConnMock) GetSeedByUri(qUri *frontier.QueuedUri) (*configV1.ConfigObject, error) {
 	panic("implement me")
 }
 

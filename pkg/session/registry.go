@@ -18,28 +18,25 @@ package session
 
 import (
 	"context"
-	"fmt"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/metrics"
 	log "github.com/sirupsen/logrus"
 	"sync"
 	"time"
 )
 
-type SessionRegistry struct {
+type Registry struct {
 	sessions        []*Session
 	pool            chan int
-	ctx             context.Context
 	mu              sync.Mutex
-	opts            []SessionOption
+	opts            []Option
 	wg              *sync.WaitGroup
 	createdSessions int32
 }
 
-func NewSessionRegistry(ctx context.Context, maxSessions int, opts ...SessionOption) (sr *SessionRegistry) {
-	sr = &SessionRegistry{
+func NewRegistry(maxSessions int, opts ...Option) (sr *Registry) {
+	sr = &Registry{
 		sessions: make([]*Session, maxSessions),
 		pool:     make(chan int, maxSessions-1),
-		ctx:      ctx,
 		opts:     opts,
 		wg:       &sync.WaitGroup{},
 	}
@@ -50,51 +47,52 @@ func NewSessionRegistry(ctx context.Context, maxSessions int, opts ...SessionOpt
 	return
 }
 
-func (sr *SessionRegistry) GetNextAvailable() (sess *Session, err error) {
+// GetNextAvailable returns next session from the pool.
+func (sr *Registry) GetNextAvailable(ctx context.Context) (*Session, error) {
+	var i int
 	select {
-	case <-sr.ctx.Done():
-		return nil, fmt.Errorf("canceled")
-	case i := <-sr.pool:
-		sr.mu.Lock()
-		defer sr.mu.Unlock()
-		sr.wg.Add(1)
-		sess, err = New(i, sr.opts...)
-		sr.sessions[i] = sess
-		metrics.ActiveBrowserSessions.Set(float64(sr.CurrentSessions()))
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case i = <-sr.pool:
 	}
-	return
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	sess, err := New(i, sr.opts...)
+	if err != nil {
+		return nil, err
+	}
+	sr.wg.Add(1)
+	sr.sessions[i] = sess
+	metrics.ActiveBrowserSessions.Set(float64(sr.CurrentSessions()))
+	return sess, nil
 }
 
-func (sr *SessionRegistry) NewDirectSession(ctx context.Context, uri, crawlExecutionId, jobExecutionId string) (*Session, error) {
-	return newDirectSession(ctx, uri, crawlExecutionId, jobExecutionId, sr.opts...)
+func (sr *Registry) NewDirectSession(uri, crawlExecutionId, jobExecutionId string) (*Session, error) {
+	return newDirectSession(uri, crawlExecutionId, jobExecutionId, sr.opts...)
 }
 
-func (sr *SessionRegistry) Get(sessId int) *Session {
+func (sr *Registry) Get(sessId int) *Session {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 	s := sr.sessions[sessId]
 	return s
 }
 
-func (sr *SessionRegistry) Release(sess *Session) {
+func (sr *Registry) Release(sess *Session) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
 	sr.sessions[sess.Id] = nil
 	metrics.ActiveBrowserSessions.Set(float64(sr.CurrentSessions()))
 	sr.wg.Done()
-	select {
-	case <-sr.ctx.Done():
-	default:
-		sr.pool <- sess.Id
-	}
+	sr.pool <- sess.Id
 }
 
-func (sr *SessionRegistry) MaxSessions() int {
+func (sr *Registry) MaxSessions() int {
 	return len(sr.sessions)
 }
 
-func (sr *SessionRegistry) CurrentSessions() int {
+func (sr *Registry) CurrentSessions() int {
 	c := 0
 	for _, s := range sr.sessions {
 		if s != nil {
@@ -104,25 +102,21 @@ func (sr *SessionRegistry) CurrentSessions() int {
 	return c
 }
 
-func (sr *SessionRegistry) CloseWait(timeout time.Duration) {
+func (sr *Registry) CloseWait(timeout time.Duration) {
 	c := make(chan struct{})
 	go func() {
-		defer close(c)
-		defer close(sr.pool)
 		sr.wg.Wait()
+		close(c)
 	}()
+	log.Debugf("Waiting for %v remaining sessions", sr.CurrentSessions())
 	select {
 	case <-c:
 		log.Infof("All sessions finished")
 		metrics.ActiveBrowserSessions.Set(float64(sr.CurrentSessions()))
 		metrics.BrowserSessions.Set(0)
-		return
 	case <-time.After(timeout):
 		log.Infof("Timed out waiting for %d sessions to finish.", sr.CurrentSessions())
 		metrics.ActiveBrowserSessions.Set(0)
 		metrics.BrowserSessions.Set(0)
-		close(c)
-		close(sr.pool)
-		return
 	}
 }

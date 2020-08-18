@@ -18,8 +18,11 @@ package serviceconnections
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"strconv"
 	"time"
 )
 
@@ -28,13 +31,13 @@ import (
 type connectionOptions struct {
 	serviceName    string
 	host           string
-	port           string
+	port           int
 	connectTimeout time.Duration
 	dialOptions    []grpc.DialOption
 }
 
-func (c *connectionOptions) Addr() string {
-	return c.host + ":" + c.port
+func (opts *connectionOptions) Addr() string {
+	return opts.host + ":" + strconv.Itoa(opts.port)
 }
 
 // ConnectionOption configures how to connect to a service.
@@ -67,13 +70,11 @@ func newFuncConnectionOption(f func(*connectionOptions)) *funcConnectionOption {
 func defaultConnectionOptions(serviceName string) connectionOptions {
 	return connectionOptions{
 		serviceName:    serviceName,
-		connectTimeout: 10 * time.Minute,
+		connectTimeout: 10 * time.Second,
 	}
 }
 
 func (opts *connectionOptions) connectService() (*grpc.ClientConn, error) {
-	log.Infof("Connecting %s at: %s", opts.serviceName, opts.Addr())
-
 	dialOpts := append(opts.dialOptions,
 		grpc.WithInsecure(),
 		grpc.WithBlock(),
@@ -81,8 +82,16 @@ func (opts *connectionOptions) connectService() (*grpc.ClientConn, error) {
 
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), opts.connectTimeout)
 	defer dialCancel()
-
-	return grpc.DialContext(dialCtx, opts.Addr(), dialOpts...)
+	clientConn, err := grpc.DialContext(dialCtx, opts.Addr(), dialOpts...)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("failed to connect to %s at %s within %s: %s", opts.serviceName, opts.Addr(),
+				opts.connectTimeout, err)
+		}
+		return nil, err
+	}
+	log.Infof("Connected to %s at %s", opts.serviceName, opts.Addr())
+	return clientConn, nil
 }
 
 func WithHost(host string) ConnectionOption {
@@ -91,7 +100,7 @@ func WithHost(host string) ConnectionOption {
 	})
 }
 
-func WithPort(port string) ConnectionOption {
+func WithPort(port int) ConnectionOption {
 	return newFuncConnectionOption(func(c *connectionOptions) {
 		c.port = port
 	})

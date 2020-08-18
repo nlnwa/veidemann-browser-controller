@@ -14,33 +14,45 @@
  * limitations under the License.
  */
 
-package controller
+package robotsevaluator
 
 import (
 	"context"
+	"fmt"
 	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
-	log "github.com/sirupsen/logrus"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	"google.golang.org/protobuf/proto"
 )
 
-func (bc *BrowserController) funcIsAllowed(ctx context.Context, request *robotsevaluatorV1.IsAllowedRequest) bool {
-	resolvedPoliteness, ignore := bc.resolvePolicy(request.Politeness)
+type RobotsEvaluator interface {
+	IsAllowed(context.Context, *robotsevaluatorV1.IsAllowedRequest) (bool, error)
+}
+
+type robotsEvaluator struct {
+	conn *serviceconnections.RobotsEvaluatorConn
+}
+
+func New(conn *serviceconnections.RobotsEvaluatorConn) RobotsEvaluator {
+	return &robotsEvaluator{conn}
+}
+
+func (r *robotsEvaluator) IsAllowed(ctx context.Context, request *robotsevaluatorV1.IsAllowedRequest) (bool, error) {
+	resolvedPoliteness, ignore := resolvePolicy(request.Politeness)
 	if ignore {
-		return true
+		return true, nil
 	}
 
 	request.Politeness = resolvedPoliteness
-	reply, err := bc.opts.robotsEvaluatorConn.Client().IsAllowed(ctx, request)
+	reply, err := r.conn.Client().IsAllowed(ctx, request)
 	if err != nil {
-		log.Errorf("Failed to open RobotsEvaluator session: %v", err)
-		return true
+		return false, fmt.Errorf("failed to get allowance from robotsEvaluator: %w", err)
 	}
 
-	return reply.IsAllowed
+	return reply.IsAllowed, nil
 }
 
-func (bc *BrowserController) resolvePolicy(politenessConfig *configV1.ConfigObject) (resolvedPoliteness *configV1.ConfigObject, ignore bool) {
+func resolvePolicy(politenessConfig *configV1.ConfigObject) (resolvedPoliteness *configV1.ConfigObject, ignore bool) {
 	var resolvedPolicy configV1.PolitenessConfig_RobotsPolicy
 	switch politenessConfig.GetPolitenessConfig().GetRobotsPolicy() {
 	case configV1.PolitenessConfig_OBEY_ROBOTS_CLASSIC:

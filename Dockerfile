@@ -1,4 +1,4 @@
-FROM golang:1.13 as build
+FROM golang:1.14 as build
 
 WORKDIR /build
 
@@ -9,13 +9,18 @@ RUN go mod download
 
 COPY . .
 
-# Compile the binary statically, so it can be run without libraries.
-RUN CGO_ENABLED=0 GOOS=linux go install -a -ldflags '-extldflags "-s -w -static"' .
-#RUN go test ./... && go install -v ./...
+# -trimpath remove file system paths from executable
+# -ldflags arguments passed to go tool link:
+#   -s disable symbol table
+#   -w disable DWARF generation
+RUN go build -trimpath -ldflags "-s -w" .
 
-# Now copy it into our base image.
 FROM gcr.io/distroless/base
-COPY --from=build /go/bin/veidemann-browser-controller /
-EXPOSE 9999
+COPY --from=build /build/veidemann-browser-controller /
+
+# api server
+EXPOSE 8080/tcp
+# prometheus metrics server
+EXPOSE 9153/tcp
 
 ENTRYPOINT ["/veidemann-browser-controller"]

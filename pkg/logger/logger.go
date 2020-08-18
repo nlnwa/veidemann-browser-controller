@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	FORMATTER_JSON   = "json"
-	FORMATTER_LOGFMT = "logfmt"
+	FormatterJson   = "json"
+	FormatterLogfmt = "logfmt"
 )
 
 func InitLog(level, formatter string, logMethod bool) error {
@@ -40,12 +40,12 @@ func InitLog(level, formatter string, logMethod bool) error {
 
 	// Configure the log formatter, defaults to ASCII formatter
 	switch strings.ToLower(formatter) {
-	case FORMATTER_LOGFMT:
+	case FormatterLogfmt:
 		log.SetFormatter(&log.TextFormatter{
 			DisableColors: true,
 			FullTimestamp: true,
 		})
-	case FORMATTER_JSON:
+	case FormatterJson:
 		log.SetFormatter(&log.JSONFormatter{})
 	default:
 		return fmt.Errorf("unknown formatter type: %q", formatter)

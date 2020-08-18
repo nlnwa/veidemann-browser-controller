@@ -18,7 +18,6 @@ package serviceconnections
 
 import (
 	contentwriterV1 "github.com/nlnwa/veidemann-api-go/contentwriter/v1"
-	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
 
@@ -48,13 +47,14 @@ func (c *ContentWriterConn) Connect() error {
 		return err
 	}
 	c.client = contentwriterV1.NewContentWriterClient(c.clientConn)
-	log.Infof("Connected to contentwriter")
 
 	return nil
 }
 
 func (c *ContentWriterConn) Close() {
-	_ = c.clientConn.Close()
+	if c.clientConn != nil {
+		_ = c.clientConn.Close()
+	}
 }
 
 func (c *ContentWriterConn) Client() contentwriterV1.ContentWriterClient {

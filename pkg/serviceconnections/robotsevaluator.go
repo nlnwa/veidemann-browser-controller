@@ -18,7 +18,6 @@ package serviceconnections
 
 import (
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
-	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
 
@@ -48,13 +47,14 @@ func (c *RobotsEvaluatorConn) Connect() error {
 		return err
 	}
 	c.client = robotsevaluatorV1.NewRobotsEvaluatorClient(c.clientConn)
-	log.Infof("Connected to robots evaluator")
 
 	return nil
 }
 
 func (c *RobotsEvaluatorConn) Close() {
-	_ = c.clientConn.Close()
+	if c.clientConn != nil {
+		_ = c.clientConn.Close()
+	}
 }
 
 func (c *RobotsEvaluatorConn) Client() robotsevaluatorV1.RobotsEvaluatorClient {
