@@ -17,6 +17,7 @@
 package database
 
 import (
+	"github.com/golang/protobuf/ptypes"
 	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
 	log "github.com/sirupsen/logrus"
@@ -142,6 +143,7 @@ func (cc *DbAdapter) GetReplacementScript(browserConfig *configV1.BrowserConfig,
 }
 
 func (cc *DbAdapter) WriteCrawlLog(crawlLog *frontierV1.CrawlLog) error {
+	crawlLog.TimeStamp = ptypes.TimestampNow()
 	return cc.db.WriteCrawlLog(crawlLog)
 }
 
