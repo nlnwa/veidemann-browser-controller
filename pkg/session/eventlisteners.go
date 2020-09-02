@@ -53,9 +53,6 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 					log.Tracef("execution context created (%d): %s %s %+v", ev.Context.ID, ev.Context.Origin, ev.Context.Name, auxData)
 				}
 			}
-		case *page.EventLoadEventFired:
-			log.Trace("Load event fired")
-			sess.onLoad <- struct{}{}
 		case *network.EventLoadingFailed:
 			log.Debugf("Loading failed: %v, %v, Reason; %v, Cancel: %v, %v, %v", ev.RequestID, ev.Type, ev.BlockedReason, ev.Canceled, ev.ErrorText, ev.Timestamp.Time())
 		case *page.EventFrameStartedLoading:

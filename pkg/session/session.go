@@ -70,7 +70,6 @@ type Session struct {
 	currentLoading    int32
 	frameWg           *syncx.WaitGroup
 	loadCancel        func()
-	onLoad            chan struct{}
 	netActivityTimer  *syncx.CompletionTimer
 	timer             *syncx.CompletionTimer
 	RequestedUrl      *frontierV1.QueuedUri
@@ -231,7 +230,6 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	loadCtx, sess.loadCancel = context.WithTimeout(sess.ctx, maxTotalTime)
 	defer sess.loadCancel()
 
-	sess.onLoad = make(chan struct{})
 	sess.frameWg = syncx.NewWaitGroup(loadCtx)
 	sess.Requests = requests.NewRegistry(sess.frameWg)
 
@@ -295,18 +293,8 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 
 	// Execute on load scripts
 	// if there are no execution contexts created there is no point in executing scripts
-	// eg. PDFs does not create execution contexts and the onload event will never fire
+	// eg. PDFs does not create execution contexts
 	if len(sess.ecd) > 0 {
-		select {
-		case <-loadCtx.Done():
-			return nil, errors.New(-5004, "Runtime exceeded", "Pageload timed out waiting for load event. Url: "+sess.RequestedUrl.Uri)
-		// wait for load event
-		case <-sess.onLoad:
-		}
-		// wait for activity to settle after load event
-		_ = sess.netActivityTimer.WaitForCompletion()
-		sess.netActivityTimer.Reset()
-
 		sess.executeOnLoadScripts(loadCtx)
 	}
 
