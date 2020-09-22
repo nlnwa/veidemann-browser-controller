@@ -25,6 +25,7 @@ import (
 	"github.com/nlnwa/veidemann-api-go/frontier/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
 )
 
 type Metadata struct {
@@ -35,19 +36,40 @@ type Metadata struct {
 }
 
 type ScreenshotWriter interface {
+	Connect() error
+	Close()
 	Write(context.Context, []byte, Metadata) error
 }
 
 type screenshotWriter struct {
-	conn *serviceconnections.ContentWriterConn
+	opts       []serviceconnections.ConnectionOption
+	clientConn *grpc.ClientConn
+	client     contentwriterV1.ContentWriterClient
 }
 
-func New(conn *serviceconnections.ContentWriterConn) ScreenshotWriter {
-	return &screenshotWriter{conn}
+func New(opts ...serviceconnections.ConnectionOption) ScreenshotWriter {
+	return &screenshotWriter{opts: opts}
 }
 
-func (c *screenshotWriter) Write(ctx context.Context, data []byte, metadata Metadata) error {
-	stream, err := c.conn.Client().Write(ctx)
+func (s *screenshotWriter) Connect() error {
+	var err error
+
+	if s.clientConn, err = serviceconnections.Connect("ContentWriter", s.opts...); err != nil {
+		return err
+	}
+	s.client = contentwriterV1.NewContentWriterClient(s.clientConn)
+
+	return nil
+}
+
+func (s *screenshotWriter) Close() {
+	if s.clientConn != nil {
+		_ = s.clientConn.Close()
+	}
+}
+
+func (s *screenshotWriter) Write(ctx context.Context, data []byte, metadata Metadata) error {
+	stream, err := s.client.Write(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open ContentWriter session: %w", err)
 	}

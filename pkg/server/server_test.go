@@ -17,19 +17,23 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
+	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/robotsevaluator"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/testutil"
 	"github.com/nlnwa/veidemann-recorderproxy/recorderproxy"
 	"github.com/nlnwa/veidemann-recorderproxy/serviceconnections"
-	"github.com/nlnwa/veidemann-recorderproxy/testutil"
+	proxyTestUtil "github.com/nlnwa/veidemann-recorderproxy/testutil"
 	"github.com/ory/dockertest"
 	log "github.com/sirupsen/logrus"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -54,7 +58,26 @@ func TestMain(m *testing.M) {
 
 	dbMock := setupDbMock()
 	dbAdapter := database.NewDbAdapter(dbMock, time.Minute)
-	screenShotWriter := screenshotwriter.NewMock()
+	screenShotWriter := &testutil.ScreenshotWriterMock{
+		WriteFunc: func(data []byte, metadata screenshotwriter.Metadata) error {
+			b := bytes.NewBuffer(data)
+			f, err := os.Create("screenshot.png")
+			if err != nil {
+				return fmt.Errorf("error opening file: %w", err)
+			}
+			defer func() {
+				_ = f.Close()
+			}()
+			_, err = io.Copy(f, b)
+			if err != nil {
+				return fmt.Errorf("failed to copy screenshot data to file: %w", err)
+			}
+			return nil
+		},
+		CloseFunc: func() {
+			_ = os.Remove("screenshot.png")
+		},
+	}
 	sessions = session.NewRegistry(
 		2,
 		session.WithBrowserPort(browserPort),
@@ -64,19 +87,21 @@ func TestMain(m *testing.M) {
 		session.WithScreenshotWriter(screenShotWriter),
 	)
 
-	robotsEvaluator := robotsevaluator.NewMock(true)
+	robotsEvaluator := &testutil.RobotsEvaluatorMock{IsAllowedFunc: func(_ *robotsevaluatorV1.IsAllowedRequest) bool {
+		return true
+	}}
 	apiServer := NewApiServer("", 7777, sessions, robotsEvaluator)
 	go func() {
 		_ = apiServer.Start()
 	}()
 
 	// Setup recorder proxy
-	opt := testutil.WithExternalBrowserController(serviceconnections.NewConnectionOptions("BrowserController",
+	opt := proxyTestUtil.WithExternalBrowserController(serviceconnections.NewConnectionOptions("BrowserController",
 		serviceconnections.WithHost("localhost"),
 		serviceconnections.WithPort("7777"),
 		serviceconnections.WithConnectTimeout(10*time.Second),
 	))
-	grpcServices := testutil.NewGrpcServiceMock(opt)
+	grpcServices := proxyTestUtil.NewGrpcServiceMock(opt)
 	recorderProxy0 := localRecorderProxy(0, grpcServices.ClientConn, "")
 	recorderProxy1 := localRecorderProxy(1, grpcServices.ClientConn, "")
 	recorderProxy2 := localRecorderProxy(2, grpcServices.ClientConn, "")
@@ -231,7 +256,7 @@ func GetOutboundIP() net.IP {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func () {
+	defer func() {
 		_ = conn.Close()
 	}()
 

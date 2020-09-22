@@ -25,7 +25,6 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/metrics"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/robotsevaluator"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/server"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/tracing"
@@ -33,7 +32,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
-	"golang.org/x/sync/errgroup"
 	"os"
 	"os/signal"
 	"strings"
@@ -113,23 +111,35 @@ func main() {
 
 	connectTimeout := viper.GetDuration("connect-timeout")
 
-	contentWriterConn := serviceconnections.NewContentWriterConn(
+	screenshotwriter := screenshotwriter.New(
 		serviceconnections.WithConnectTimeout(connectTimeout),
 		serviceconnections.WithHost(viper.GetString("content-writer-host")),
 		serviceconnections.WithPort(viper.GetInt("content-writer-port")),
 	)
+	if err := screenshotwriter.Connect(); err != nil {
+		log.WithError(err).Fatal()
+	}
+	defer screenshotwriter.Close()
 
-	frontierConn := serviceconnections.NewFrontierConn(
+	harvester := harvester.New(
 		serviceconnections.WithConnectTimeout(connectTimeout),
 		serviceconnections.WithHost(viper.GetString("frontier-host")),
 		serviceconnections.WithPort(viper.GetInt("frontier-port")),
 	)
+	if err := harvester.Connect(); err != nil {
+		log.WithError(err).Fatal()
+	}
+	defer harvester.Close()
 
-	robotsEvaluatorConn := serviceconnections.NewRobotsEvaluatorConn(
+	robotsEvaluator := robotsevaluator.New(
 		serviceconnections.WithConnectTimeout(connectTimeout),
 		serviceconnections.WithHost(viper.GetString("robots-evaluator-host")),
 		serviceconnections.WithPort(viper.GetInt("robots-evaluator-port")),
 	)
+	if err := robotsEvaluator.Connect(); err != nil {
+		log.WithError(err).Fatal()
+	}
+	defer robotsEvaluator.Close()
 
 	db := database.NewConnection(
 		viper.GetString("db-host"),
@@ -138,79 +148,48 @@ func main() {
 		viper.GetString("db-password"),
 		viper.GetString("db-name"),
 	)
+	if err := db.Connect(); err != nil {
+		log.WithError(err).Fatal()
+	}
+	defer db.Close()
 
 	configCache := database.NewDbAdapter(db, 5*time.Minute)
 
-	h := harvester.New(frontierConn)
-
-	sw := screenshotwriter.New(contentWriterConn)
-
-	re := robotsevaluator.New(robotsEvaluatorConn)
-
-	sessions := session.NewRegistry(
-		viper.GetInt("proxy-count"),
-		session.WithScreenshotWriter(sw),
-		session.WithBrowserHost(viper.GetString("browser-host")),
-		session.WithBrowserPort(viper.GetInt("browser-port")),
-		session.WithProxyHost(viper.GetString("proxy-host")),
-		session.WithProxyPort(viper.GetInt("proxy-port")),
-		session.WithDbAdapter(configCache),
+	browserController := controller.New(
+		controller.WithListenInterface(viper.GetString("interface")),
+		controller.WithListenPort(viper.GetInt("port")),
+		controller.WithMaxConcurrentSessions(viper.GetInt("proxy-count")),
+		controller.WithHarvester(harvester),
+		controller.WithRobotsEvaluator(robotsEvaluator),
+		controller.WithSessionOptions(
+			session.WithScreenshotWriter(screenshotwriter),
+			session.WithBrowserHost(viper.GetString("browser-host")),
+			session.WithBrowserPort(viper.GetInt("browser-port")),
+			session.WithProxyHost(viper.GetString("proxy-host")),
+			session.WithProxyPort(viper.GetInt("proxy-port")),
+			session.WithDbAdapter(configCache),
+		),
 	)
 
-	apiServer := server.NewApiServer(viper.GetString("interface"), viper.GetInt("port"), sessions, re)
+	errc := make(chan error, 1)
 
-	bc := controller.New(sessions, h)
+	go func() { errc <- metricsServer.Start() }()
+	defer metricsServer.Close()
 
-	err := func() error {
-		connectGroup := &errgroup.Group{}
-
-		connectGroup.Go(func() error { return db.Connect() })
-		defer func() { _ = db.Close() }()
-
-		connectGroup.Go(func() error { return contentWriterConn.Connect() })
-		defer contentWriterConn.Close()
-
-		connectGroup.Go(func() error { return frontierConn.Connect() })
-		defer frontierConn.Close()
-
-		connectGroup.Go(func() error { return robotsEvaluatorConn.Connect() })
-		defer robotsEvaluatorConn.Close()
-
-		if err := connectGroup.Wait(); err != nil {
-			return err
-		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		errc := make(chan error, 3)
-
-		go func() { errc <- metricsServer.Start() }()
-		defer metricsServer.Close()
-
-		go func() { errc <- apiServer.Start() }()
-		defer apiServer.Close()
-
-		// give apiServer a chance to start
-		<-time.After(time.Millisecond)
-
-		go func() { errc <- bc.Run(ctx) }()
-		defer sessions.CloseWait(5*time.Minute)
-
-		defer cancel()
-
+	ctx := context.Background()
+	go func() {
 		signals := make(chan os.Signal)
 		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 
 		select {
-		case err := <-errc:
-			return err
+		case <-errc:
+			browserController.Stop()
 		case sig := <-signals:
 			log.Debugf("Received signal: %s", sig)
-			return nil
-		case <-ctx.Done():
-			return nil
+			browserController.Stop()
 		}
 	}()
-	if err != nil {
-		log.WithError(err).Fatal()
-	}
+
+	err := browserController.Run(ctx)
+	log.WithError(err).Fatal()
 }

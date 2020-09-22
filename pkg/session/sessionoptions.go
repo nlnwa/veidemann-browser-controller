@@ -21,7 +21,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
 )
 
-// ParserOption configures how we parse a URL.
+// SessionOption configures Session Registry.
 type Option interface {
 	apply(*Session)
 }

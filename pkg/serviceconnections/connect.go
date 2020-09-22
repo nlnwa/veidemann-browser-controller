@@ -14,21 +14,16 @@
  * limitations under the License.
  */
 
-package robotsevaluator
+package serviceconnections
 
-import (
-	"context"
-	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
-)
+import "google.golang.org/grpc"
 
-type robotsEvaluatorMock struct {
-	isAllowed bool
-}
+func Connect(serviceName string, opts ...ConnectionOption) (*grpc.ClientConn, error) {
+	o := defaultConnectionOptions(serviceName)
+	for _, opt := range opts {
+		opt.apply(&o)
+	}
 
-func NewMock(isAllowed bool) RobotsEvaluator {
-	return &robotsEvaluatorMock{isAllowed}
-}
-
-func (r *robotsEvaluatorMock) IsAllowed(_ context.Context, _ *robotsevaluatorV1.IsAllowedRequest) (bool, error) {
-	return r.isAllowed, nil
+	// Set up ContentWriterClient
+	return o.connectService()
 }
