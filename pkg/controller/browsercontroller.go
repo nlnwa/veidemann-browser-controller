@@ -28,13 +28,13 @@ import (
 type BrowserController struct {
 	opts     browserControllerOptions
 	sessions *session.Registry
-	stopping chan bool
+	shutdown chan error
 }
 
 func New(opts ...BrowserControllerOption) *BrowserController {
 	bc := &BrowserController{
 		opts:     defaultBrowserControllerOptions(),
-		stopping: make(chan bool, 1),
+		shutdown: make(chan error),
 	}
 	for _, opt := range opts {
 		opt.apply(&bc.opts)
@@ -49,7 +49,9 @@ func (bc *BrowserController) Run(ctx context.Context) error {
 	)
 
 	apiServer := server.NewApiServer(bc.opts.listenInterface, bc.opts.listenPort, bc.sessions, bc.opts.robotsEvaluator)
-	go func() error { return apiServer.Start() }()
+	go func() {
+		bc.shutdown <- apiServer.Start()
+	}()
 
 	defer apiServer.Close()
 	defer bc.sessions.CloseWait(bc.opts.closeTimeout)
@@ -57,24 +59,42 @@ func (bc *BrowserController) Run(ctx context.Context) error {
 	// give apiServer a chance to start
 	<-time.After(time.Millisecond)
 
+	bcCtx, bcCancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case err := <-bc.shutdown:
+			if err != nil {
+				log.WithError(err).Errorf("api server failed")
+			}
+			bcCancel()
+		case <-ctx.Done():
+			log.Infof("Browser Controller canceled")
+			bc.shutdown <- nil
+		}
+	}()
+
 	log.Infof("Browser Controller started")
 
 	for {
 		select {
-		case <-ctx.Done():
-			bc.Stop()
+		case <-bcCtx.Done():
 			return ctx.Err()
-		case <-bc.stopping:
-			return fmt.Errorf("browser controller requested to stop")
 		default:
-			sess, err := bc.sessions.GetNextAvailable(ctx)
+			sess, err := bc.sessions.GetNextAvailable(bcCtx)
 			if err != nil {
+				if err == context.Canceled {
+					break
+				}
 				return fmt.Errorf("failed to get session: %w", err)
 			}
 			go func() {
-				err := bc.opts.harvester.Harvest(ctx, sess.Fetch)
+				err := bc.opts.harvester.Harvest(bcCtx, sess.Fetch)
 				if err != nil {
-					log.Warnf("Harvest completed with error: %v", err)
+					if err == context.Canceled {
+						log.Debugf("Harvest session #%v canceled", sess.Id)
+					} else {
+						log.Warnf("Harvest completed with error: %v", err)
+					}
 					<-time.After(time.Second)
 				}
 				if sess != nil {
@@ -85,7 +105,7 @@ func (bc *BrowserController) Run(ctx context.Context) error {
 	}
 }
 
-func (bc *BrowserController) Stop() {
-	log.Infof("Stopping Browser Controller ...")
-	close(bc.stopping)
+func (bc *BrowserController) Shutdown() {
+	log.Infof("Shutting down Browser Controller...")
+	bc.shutdown <- nil
 }

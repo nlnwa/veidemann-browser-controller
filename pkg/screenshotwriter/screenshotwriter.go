@@ -25,7 +25,6 @@ import (
 	"github.com/nlnwa/veidemann-api-go/frontier/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/grpc"
 )
 
 type Metadata struct {
@@ -42,30 +41,25 @@ type ScreenshotWriter interface {
 }
 
 type screenshotWriter struct {
-	opts       []serviceconnections.ConnectionOption
-	clientConn *grpc.ClientConn
+	clientConn *serviceconnections.ClientConn
 	client     contentwriterV1.ContentWriterClient
 }
 
 func New(opts ...serviceconnections.ConnectionOption) ScreenshotWriter {
-	return &screenshotWriter{opts: opts}
+	return &screenshotWriter{clientConn: serviceconnections.NewClientConn("ContentWriter", opts...)}
 }
 
 func (s *screenshotWriter) Connect() error {
-	var err error
-
-	if s.clientConn, err = serviceconnections.Connect("ContentWriter", s.opts...); err != nil {
+	if err := s.clientConn.Connect(); err != nil {
 		return err
+	} else {
+		s.client = contentwriterV1.NewContentWriterClient(s.clientConn.Connection())
+		return nil
 	}
-	s.client = contentwriterV1.NewContentWriterClient(s.clientConn)
-
-	return nil
 }
 
 func (s *screenshotWriter) Close() {
-	if s.clientConn != nil {
-		_ = s.clientConn.Close()
-	}
+	s.clientConn.Close()
 }
 
 func (s *screenshotWriter) Write(ctx context.Context, data []byte, metadata Metadata) error {

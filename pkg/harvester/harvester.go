@@ -26,7 +26,6 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/metrics"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/grpc"
 	"io"
 	"strconv"
 	"sync"
@@ -49,30 +48,25 @@ type Harvester interface {
 }
 
 type harvester struct {
-	opts       []serviceconnections.ConnectionOption
-	clientConn *grpc.ClientConn
+	clientConn *serviceconnections.ClientConn
 	client     frontierV1.FrontierClient
 }
 
 func New(opts ...serviceconnections.ConnectionOption) Harvester {
-	return &harvester{opts: opts}
+	return &harvester{clientConn: serviceconnections.NewClientConn("Frontier", opts...)}
 }
 
 func (h *harvester) Connect() error {
-	var err error
-
-	if h.clientConn, err = serviceconnections.Connect("RobotsEvaluator", h.opts...); err != nil {
+	if err := h.clientConn.Connect(); err != nil {
 		return err
+	} else {
+		h.client = frontierV1.NewFrontierClient(h.clientConn.Connection())
+		return nil
 	}
-	h.client = frontierV1.NewFrontierClient(h.clientConn)
-
-	return nil
 }
 
 func (h *harvester) Close() {
-	if h.clientConn != nil {
-		_ = h.clientConn.Close()
-	}
+	h.clientConn.Close()
 }
 
 func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {

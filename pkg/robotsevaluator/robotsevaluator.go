@@ -22,7 +22,6 @@ import (
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -33,30 +32,25 @@ type RobotsEvaluator interface {
 }
 
 type robotsEvaluator struct {
-	opts       []serviceconnections.ConnectionOption
-	clientConn *grpc.ClientConn
+	clientConn *serviceconnections.ClientConn
 	client     robotsevaluatorV1.RobotsEvaluatorClient
 }
 
 func New(opts ...serviceconnections.ConnectionOption) RobotsEvaluator {
-	return &robotsEvaluator{opts: opts}
+	return &robotsEvaluator{clientConn: serviceconnections.NewClientConn("RobotsEvaluator", opts...)}
 }
 
 func (r *robotsEvaluator) Connect() error {
-	var err error
-
-	if r.clientConn, err = serviceconnections.Connect("RobotsEvaluator", r.opts...); err != nil {
+	if err := r.clientConn.Connect(); err != nil {
 		return err
+	} else {
+		r.client = robotsevaluatorV1.NewRobotsEvaluatorClient(r.clientConn.Connection())
+		return nil
 	}
-	r.client = robotsevaluatorV1.NewRobotsEvaluatorClient(r.clientConn)
-
-	return nil
 }
 
 func (r *robotsEvaluator) Close() {
-	if r.clientConn != nil {
-		_ = r.clientConn.Close()
-	}
+	r.clientConn.Close()
 }
 
 func (r *robotsEvaluator) IsAllowed(ctx context.Context, request *robotsevaluatorV1.IsAllowedRequest) bool {

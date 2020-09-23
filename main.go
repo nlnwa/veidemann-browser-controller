@@ -81,7 +81,8 @@ func main() {
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
 	if err := viper.BindPFlags(pflag.CommandLine); err != nil {
-		log.Fatalf("Could not parse flags: %s", err)
+		log.Errorf("Could not parse flags: %s", err)
+		return
 	}
 
 	if viper.GetBool("help") {
@@ -95,16 +96,20 @@ func main() {
 		viper.GetString("log-formatter"),
 		viper.GetBool("log-method"),
 	); err != nil {
-		log.Fatalf("Could not initialize logs: %v", err)
+		log.Errorf("Could not initialize logs: %v", err)
+		return
 	}
 
+	log.Infof("Browser Controller starting...")
+	defer func() {
+		log.Infof("Browser Controller stopped")
+	}()
+
 	// setup tracing
-	tracer, closer := tracing.Init("Recorder Proxy")
+	tracer, closer := tracing.Init("Browser Controller")
 	if tracer != nil {
 		opentracing.SetGlobalTracer(tracer)
-		defer func() {
-			_ = closer.Close()
-		}()
+		defer closer.Close()
 	}
 
 	metricsServer := metrics.NewServer(viper.GetString("metrics-interface"), viper.GetInt("metrics-port"), viper.GetString("metrics-path"))
@@ -117,7 +122,8 @@ func main() {
 		serviceconnections.WithPort(viper.GetInt("content-writer-port")),
 	)
 	if err := screenshotwriter.Connect(); err != nil {
-		log.WithError(err).Fatal()
+		log.WithError(err).Error()
+		return
 	}
 	defer screenshotwriter.Close()
 
@@ -127,7 +133,8 @@ func main() {
 		serviceconnections.WithPort(viper.GetInt("frontier-port")),
 	)
 	if err := harvester.Connect(); err != nil {
-		log.WithError(err).Fatal()
+		log.WithError(err).Error()
+		return
 	}
 	defer harvester.Close()
 
@@ -137,7 +144,8 @@ func main() {
 		serviceconnections.WithPort(viper.GetInt("robots-evaluator-port")),
 	)
 	if err := robotsEvaluator.Connect(); err != nil {
-		log.WithError(err).Fatal()
+		log.WithError(err).Error()
+		return
 	}
 	defer robotsEvaluator.Close()
 
@@ -149,7 +157,8 @@ func main() {
 		viper.GetString("db-name"),
 	)
 	if err := db.Connect(); err != nil {
-		log.WithError(err).Fatal()
+		log.WithError(err).Error()
+		return
 	}
 	defer db.Close()
 
@@ -182,14 +191,17 @@ func main() {
 		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 
 		select {
-		case <-errc:
-			browserController.Stop()
+		case err := <-errc:
+			log.WithError(err).Error("Metrics server failed")
+			browserController.Shutdown()
 		case sig := <-signals:
 			log.Debugf("Received signal: %s", sig)
-			browserController.Stop()
+			browserController.Shutdown()
 		}
 	}()
 
 	err := browserController.Run(ctx)
-	log.WithError(err).Fatal()
+	if err != nil {
+		log.WithError(err).Error()
+	}
 }

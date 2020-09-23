@@ -16,14 +16,44 @@
 
 package serviceconnections
 
-import "google.golang.org/grpc"
+import (
+	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
+)
 
-func Connect(serviceName string, opts ...ConnectionOption) (*grpc.ClientConn, error) {
+type ClientConn struct {
+	conn *grpc.ClientConn
+	opts *connectionOptions
+}
+
+func (c *ClientConn) Connect() error {
+	var err error
+	c.conn, err = c.opts.connectService()
+	return err
+}
+
+func (c *ClientConn) Close() {
+	if c.conn != nil {
+		err := c.conn.Close()
+		if err == nil {
+			log.Infof("Disconnected from %v", c.opts.serviceName)
+		} else {
+			log.WithError(err).Warnf("Error while disconnecting from %v", c.opts.serviceName)
+		}
+	}
+}
+
+func (c *ClientConn) Connection() *grpc.ClientConn {
+	return c.conn
+}
+
+func NewClientConn(serviceName string, opts ...ConnectionOption) *ClientConn {
 	o := defaultConnectionOptions(serviceName)
 	for _, opt := range opts {
 		opt.apply(&o)
 	}
 
-	// Set up ContentWriterClient
-	return o.connectService()
+	return &ClientConn{
+		opts: &o,
+	}
 }

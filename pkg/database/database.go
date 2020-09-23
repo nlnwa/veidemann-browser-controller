@@ -71,6 +71,7 @@ func (c *connection) Connect() error {
 
 // Close closes the connection
 func (c *connection) Close() error {
+	log.Infof("Closing database connection")
 	return c.dbSession.(*r.Session).Close()
 }
 
