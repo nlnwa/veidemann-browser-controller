@@ -17,7 +17,6 @@
 package main
 
 import (
-	"context"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/controller"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/harvester"
@@ -185,7 +184,6 @@ func main() {
 	go func() { errc <- metricsServer.Start() }()
 	defer metricsServer.Close()
 
-	ctx := context.Background()
 	go func() {
 		signals := make(chan os.Signal)
 		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -200,7 +198,7 @@ func main() {
 		}
 	}()
 
-	err := browserController.Run(ctx)
+	err := browserController.Run()
 	if err != nil {
 		log.WithError(err).Error()
 	}
