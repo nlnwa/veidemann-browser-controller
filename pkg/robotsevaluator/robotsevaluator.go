@@ -62,7 +62,7 @@ func (r *robotsEvaluator) IsAllowed(ctx context.Context, request *robotsevaluato
 	request.Politeness = resolvedPoliteness
 	reply, err := r.client.IsAllowed(ctx, request)
 	if err != nil {
-		log.Warnf("failed to get allowance from robotsEvaluator: %w", err)
+		log.Warnf("failed to get allowance from robotsEvaluator: %v", err)
 		return true
 	}
 
