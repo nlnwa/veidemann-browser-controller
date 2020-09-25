@@ -53,6 +53,7 @@ func (bc *BrowserController) Run() error {
 	go func() {
 		err := apiServer.Start()
 		if err != nil {
+			log.WithError(err).Error("Api server failed")
 			bc.cancel()
 		}
 	}()
