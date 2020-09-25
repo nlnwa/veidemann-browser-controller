@@ -19,39 +19,84 @@ package controller
 import (
 	"context"
 	"fmt"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/harvester"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/server"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	log "github.com/sirupsen/logrus"
 	"time"
 )
 
 type BrowserController struct {
-	sessions  *session.Registry
-	harvester harvester.Harvester
+	opts   browserControllerOptions
+	cancel func()
 }
 
-func New(sessions *session.Registry, harvester harvester.Harvester) *BrowserController {
-	return &BrowserController{
-		sessions:  sessions,
-		harvester: harvester,
+func New(opts ...BrowserControllerOption) *BrowserController {
+	bc := &BrowserController{
+		opts: defaultBrowserControllerOptions(),
 	}
+	for _, opt := range opts {
+		opt.apply(&bc.opts)
+	}
+	return bc
 }
 
-func (bc *BrowserController) Run(ctx context.Context) error {
-	for {
-		sess, err := bc.sessions.GetNextAvailable(ctx)
+func (bc *BrowserController) Run() error {
+	var ctx context.Context
+	ctx, bc.cancel = context.WithCancel(context.Background())
+
+	sessions := session.NewRegistry(
+		bc.opts.maxSessions,
+		bc.opts.sessionOpts...,
+	)
+
+	apiServer := server.NewApiServer(bc.opts.listenInterface, bc.opts.listenPort, sessions, bc.opts.robotsEvaluator)
+	go func() {
+		err := apiServer.Start()
 		if err != nil {
-			return fmt.Errorf("failed to get session: %w", err)
+			log.WithError(err).Error("Api server failed")
+			bc.cancel()
 		}
-		go func() {
-			err := bc.harvester.Harvest(ctx, sess.Fetch)
+	}()
+
+	defer apiServer.Close()
+	defer sessions.CloseWait(bc.opts.closeTimeout)
+
+	// give apiServer a chance to start
+	time.Sleep(time.Millisecond)
+
+	log.Infof("Browser Controller started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			sess, err := sessions.GetNextAvailable(ctx)
 			if err != nil {
-				log.Warnf("Harvest completed with error: %v", err)
-				<-time.After(time.Second)
+				if err == context.Canceled {
+					break
+				}
+				return fmt.Errorf("failed to get session: %w", err)
 			}
-			if sess != nil {
-				bc.sessions.Release(sess)
-			}
-		}()
+			go func() {
+				err := bc.opts.harvester.Harvest(ctx, sess.Fetch)
+				if err != nil {
+					if err == context.Canceled {
+						log.Debugf("Harvest session #%v canceled", sess.Id)
+					} else {
+						log.Warnf("Harvest completed with error: %v", err)
+					}
+					time.Sleep(time.Second)
+				}
+				if sess != nil {
+					sessions.Release(sess)
+				}
+			}()
+		}
 	}
+}
+
+func (bc *BrowserController) Shutdown() {
+	log.Infof("Shutting down Browser Controller...")
+	bc.cancel()
 }

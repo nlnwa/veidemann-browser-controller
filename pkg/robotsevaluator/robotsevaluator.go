@@ -18,38 +18,55 @@ package robotsevaluator
 
 import (
 	"context"
-	"fmt"
 	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
+	log "github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
 )
 
 type RobotsEvaluator interface {
-	IsAllowed(context.Context, *robotsevaluatorV1.IsAllowedRequest) (bool, error)
+	Connect() error
+	Close()
+	IsAllowed(context.Context, *robotsevaluatorV1.IsAllowedRequest) bool
 }
 
 type robotsEvaluator struct {
-	conn *serviceconnections.RobotsEvaluatorConn
+	clientConn *serviceconnections.ClientConn
+	client     robotsevaluatorV1.RobotsEvaluatorClient
 }
 
-func New(conn *serviceconnections.RobotsEvaluatorConn) RobotsEvaluator {
-	return &robotsEvaluator{conn}
+func New(opts ...serviceconnections.ConnectionOption) RobotsEvaluator {
+	return &robotsEvaluator{clientConn: serviceconnections.NewClientConn("RobotsEvaluator", opts...)}
 }
 
-func (r *robotsEvaluator) IsAllowed(ctx context.Context, request *robotsevaluatorV1.IsAllowedRequest) (bool, error) {
+func (r *robotsEvaluator) Connect() error {
+	if err := r.clientConn.Connect(); err != nil {
+		return err
+	} else {
+		r.client = robotsevaluatorV1.NewRobotsEvaluatorClient(r.clientConn.Connection())
+		return nil
+	}
+}
+
+func (r *robotsEvaluator) Close() {
+	r.clientConn.Close()
+}
+
+func (r *robotsEvaluator) IsAllowed(ctx context.Context, request *robotsevaluatorV1.IsAllowedRequest) bool {
 	resolvedPoliteness, ignore := resolvePolicy(request.Politeness)
 	if ignore {
-		return true, nil
+		return true
 	}
 
 	request.Politeness = resolvedPoliteness
-	reply, err := r.conn.Client().IsAllowed(ctx, request)
+	reply, err := r.client.IsAllowed(ctx, request)
 	if err != nil {
-		return false, fmt.Errorf("failed to get allowance from robotsEvaluator: %w", err)
+		log.Warnf("failed to get allowance from robotsEvaluator: %v", err)
+		return true
 	}
 
-	return reply.IsAllowed, nil
+	return reply.IsAllowed
 }
 
 func resolvePolicy(politenessConfig *configV1.ConfigObject) (resolvedPoliteness *configV1.ConfigObject, ignore bool) {

@@ -51,9 +51,9 @@ func NewRegistry(maxSessions int, opts ...Option) (sr *Registry) {
 func (sr *Registry) GetNextAvailable(ctx context.Context) (*Session, error) {
 	var i int
 	select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case i = <-sr.pool:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case i = <-sr.pool:
 	}
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
@@ -63,7 +63,6 @@ func (sr *Registry) GetNextAvailable(ctx context.Context) (*Session, error) {
 	}
 	sr.wg.Add(1)
 	sr.sessions[i] = sess
-	metrics.ActiveBrowserSessions.Set(float64(sr.CurrentSessions()))
 	return sess, nil
 }
 
@@ -83,7 +82,6 @@ func (sr *Registry) Release(sess *Session) {
 	defer sr.mu.Unlock()
 
 	sr.sessions[sess.Id] = nil
-	metrics.ActiveBrowserSessions.Set(float64(sr.CurrentSessions()))
 	sr.wg.Done()
 	sr.pool <- sess.Id
 }
@@ -112,7 +110,7 @@ func (sr *Registry) CloseWait(timeout time.Duration) {
 	select {
 	case <-c:
 		log.Infof("All sessions finished")
-		metrics.ActiveBrowserSessions.Set(float64(sr.CurrentSessions()))
+		metrics.ActiveBrowserSessions.Set(0)
 		metrics.BrowserSessions.Set(0)
 	case <-time.After(timeout):
 		log.Infof("Timed out waiting for %d sessions to finish.", sr.CurrentSessions())

@@ -42,22 +42,38 @@ type RenderResult struct {
 type FetchFunc func(*frontierV1.QueuedUri, *configV1.ConfigObject) (*RenderResult, error)
 
 type Harvester interface {
+	Connect() error
+	Close()
 	Harvest(context.Context, FetchFunc) error
 }
 
 type harvester struct {
-	conn *serviceconnections.FrontierConn
+	clientConn *serviceconnections.ClientConn
+	client     frontierV1.FrontierClient
 }
 
-func New(conn *serviceconnections.FrontierConn) Harvester {
-	return &harvester{conn}
+func New(opts ...serviceconnections.ConnectionOption) Harvester {
+	return &harvester{clientConn: serviceconnections.NewClientConn("Frontier", opts...)}
 }
 
-func (f *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
+func (h *harvester) Connect() error {
+	if err := h.clientConn.Connect(); err != nil {
+		return err
+	} else {
+		h.client = frontierV1.NewFrontierClient(h.clientConn.Connection())
+		return nil
+	}
+}
+
+func (h *harvester) Close() {
+	h.clientConn.Close()
+}
+
+func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 	harvestCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stream, err := f.conn.Client().GetNextPage(harvestCtx)
+	stream, err := h.client.GetNextPage(harvestCtx)
 	if err != nil {
 		return fmt.Errorf("failed to get the frontier GetNextPage client: %w", err)
 	}
@@ -102,6 +118,7 @@ func (f *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 	}
 
 	log.WithField("uri", harvestSpec.QueuedUri.Uri).Tracef("Starting fetch")
+	metrics.ActiveBrowserSessions.Inc()
 	metrics.PagesTotal.Inc()
 	renderResult, err := fetch(harvestSpec.QueuedUri, harvestSpec.CrawlConfig)
 	if err != nil {
@@ -117,6 +134,7 @@ func (f *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 		err := stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_Error{Error: renderResult.Error}})
 		if err != nil {
 			metrics.PagesFailedTotal.WithLabelValues(strconv.Itoa(int(renderResult.Error.Code))).Inc()
+			metrics.ActiveBrowserSessions.Dec()
 			return fmt.Errorf("failed to send error response to Frontier: %w", err)
 		}
 	} else {
@@ -134,11 +152,13 @@ func (f *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 
 		for _, outlink := range renderResult.Outlinks {
 			if err := stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_Outlink{Outlink: outlink}}); err != nil {
+				metrics.ActiveBrowserSessions.Dec()
 				return fmt.Errorf("failed to send outlink to Frontier: %w", err)
 			}
 		}
 	}
 
+	metrics.ActiveBrowserSessions.Dec()
 	if err := stream.CloseSend(); err != nil {
 		return fmt.Errorf("failed to close send: %w", err)
 	}

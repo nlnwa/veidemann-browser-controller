@@ -183,12 +183,18 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				CollectionRef:  sess.CrawlConfig.CollectionRef,
 			}
 
-			isAllowed, err := a.robotsEvaluator.IsAllowed(ctx, robotsRequest)
-			if err != nil {
-				return err
-			}
+			isAllowed := a.robotsEvaluator.IsAllowed(ctx, robotsRequest)
 			if !isAllowed {
-				log.Debugf("URI %v was blocked by robots.txt", v.New.Uri)
+				log.Infof("URI %v was blocked by robots.txt (ceid: %v)", v.New.Uri, sess.RequestedUrl.ExecutionId)
+				req = sess.Requests.GetByRequestId(v.New.RequestId)
+				if req == nil {
+					log.Warnf("No request found for %v", v.New.RequestId)
+				} else {
+					req.GotNew = true
+					if err := sess.Notify(req.RequestId); err != nil {
+						return err
+					}
+				}
 				if err = Send(stream.Send, &browsercontrollerV1.DoReply{
 					Action: &browsercontrollerV1.DoReply_Cancel{
 						Cancel: "Blocked by robots.txt",
