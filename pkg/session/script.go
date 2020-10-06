@@ -18,7 +18,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -102,14 +101,7 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 
 		res, err := callScript(ctx, eci, configObject.GetBrowserScript().GetScript(), arguments)
 
-		if log.GetLevel() == log.DebugLevel {
-			var rv script.ReturnValue
-			err := json.Unmarshal(res, &rv)
-			if err != nil {
-				log.Warnf("Failed to unmarshal return value from script %s (%s), %v", name, id, err)
-			}
-			log.Debugf("Script %s (%s) returned: %v", name, id, rv)
-		}
+		log.Debugf("Script %s (%s) returned: %s", name, id, res)
 
 		return res, err
 	}
