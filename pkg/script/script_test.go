@@ -175,6 +175,10 @@ func TestRun(t *testing.T) {
 									Key:   "username",
 									Value: "small",
 								},
+								{
+									Key: "v7n_seed-annotation-key",
+									Value: "username",
+								},
 							},
 						},
 					},

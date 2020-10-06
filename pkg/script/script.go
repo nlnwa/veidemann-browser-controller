@@ -8,6 +8,10 @@ import (
 	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 )
 
+// seedAnnotationSelectorKey is the key value of a script annotation used for
+// selecting which seed annotations to use as arguments to a script
+var seedAnnotationSelectorKey = "v7n_seed-annotation-key"
+
 // ReturnValue is the return value format for scripts of type
 // ON_LOAD, ON_NEW_DOCUMENT and UNDEFINED.
 type ReturnValue struct {
@@ -62,14 +66,24 @@ func Run(
 		}
 		name := script.GetMeta().GetName()
 
+		var seedAnnotationSelectors []string
+
 		params := make(map[string]interface{})
 		// add script annotations
 		for _, annotation := range script.GetMeta().GetAnnotation() {
-			params[annotation.Key] = annotation.Value
+			if annotation.Key == seedAnnotationSelectorKey {
+				seedAnnotationSelectors = append(seedAnnotationSelectors, annotation.Value)
+			} else {
+				params[annotation.Key] = annotation.Value
+			}
 		}
 		// add seed annotations
 		for _, annotation := range seed.GetMeta().GetAnnotation() {
-			params[annotation.Key] = annotation.Value
+			for _, key := range seedAnnotationSelectors {
+				if annotation.Key == key {
+					params[annotation.Key] = annotation.Value
+				}
+			}
 		}
 		// add data from return value of previous script as arguments to next script
 		for key, value := range data {
