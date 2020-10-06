@@ -32,7 +32,6 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/device"
 	"github.com/golang/protobuf/ptypes"
-	"github.com/mailru/easyjson"
 	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
@@ -56,7 +55,6 @@ import (
 type Session struct {
 	Id                int
 	ctx               context.Context
-	ecd               []*runtime.ExecutionContextDescription
 	browserHost       string
 	browserPort       int
 	browserTimeout    int
@@ -291,11 +289,11 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	_ = sess.netActivityTimer.WaitForCompletion()
 	sess.netActivityTimer.Reset()
 
-	// Execute on load scripts
-	// if there are no execution contexts created there is no point in executing scripts
-	// eg. PDFs does not create execution contexts
-	if len(sess.ecd) > 0 {
-		sess.executeOnLoadScripts(loadCtx)
+	if err := sess.executeScripts(loadCtx, configV1.BrowserScript_ON_NEW_DOCUMENT); err != nil {
+		return nil, fmt.Errorf("failed executing scripts in %v phase: %w", configV1.BrowserScript_ON_NEW_DOCUMENT, err)
+	}
+	if err := sess.executeScripts(loadCtx, configV1.BrowserScript_ON_LOAD); err != nil {
+		log.Warnf("Failed executing scripts in %v phase: %v", configV1.BrowserScript_ON_LOAD, err)
 	}
 
 	// Wait for frames to finish loading
@@ -403,180 +401,6 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	return result, nil
 }
 
-func (sess *Session) callScript(ctx context.Context, eci runtime.ExecutionContextID, fn string, arguments easyjson.RawMessage) (easyjson.RawMessage, error) {
-	var res *runtime.RemoteObject
-	var exceptionDetails *runtime.ExceptionDetails
-	err := chromedp.Run(ctx,
-		chromedp.ActionFunc(func(ctx context.Context) (err error) {
-			res, exceptionDetails, err = runtime.
-				CallFunctionOn(fn).
-				WithArguments([]*runtime.CallArgument{{Value: arguments}}).
-				WithExecutionContextID(eci).
-				WithReturnByValue(true).
-				Do(ctx)
-			return err
-		}),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("%v: %w", exceptionDetails, err)
-	}
-	return res.Value, nil
-}
-
-func (sess *Session) executeOnLoadScripts(ctx context.Context) {
-	log.Tracef("Executing %v scripts", configV1.BrowserScript_ON_LOAD)
-
-	seedAnnotations := sess.DbAdapter.GetSeedByUri(sess.RequestedUrl).GetMeta().GetAnnotation()
-
-	undefinedScripts := make(map[string]string)
-	undefinedScriptAnnotations := make(map[string][]*configV1.Annotation)
-	for _, script := range sess.DbAdapter.GetScripts(sess.BrowserConfig, configV1.BrowserScript_UNDEFINED) {
-		undefinedScripts[script.Meta.Name] = script.GetBrowserScript().GetScript()
-		undefinedScriptAnnotations[script.Meta.Name] = script.GetMeta().GetAnnotation()
-	}
-
-	for _, script := range sess.DbAdapter.GetScripts(sess.BrowserConfig, configV1.BrowserScript_ON_LOAD) {
-		scriptAnnotations := script.GetMeta().GetAnnotation()
-
-		// merge annotations from seed and script
-		annotations := make(map[string]string)
-		for _, a := range scriptAnnotations {
-			annotations[a.Key] = a.Value
-		}
-		// seed annotations override script annotations
-		for _, b := range seedAnnotations {
-			annotations[b.Key] = b.Value
-		}
-
-		initialArgs, err := json.Marshal(&annotations)
-		if err != nil {
-			log.Errorf("Failed marshal annotations as initial arguments for script: %v", err)
-			continue
-		}
-
-		var eci runtime.ExecutionContextID
-		// try to pick top level javascript execution context
-		ecdLength := len(sess.ecd)
-		for _, ecd := range sess.ecd {
-			if ecd.Name == "" {
-				eci = ecd.ID
-				break
-			}
-		}
-		if eci == 0 {
-			log.Error("failed to get execution context")
-			return
-		}
-
-		// initalize function arguments
-		arguments := easyjson.RawMessage(initialArgs)
-		// name of next script to run (self is current script)
-		next := "self"
-
-		for {
-			select {
-			case <-ctx.Done():
-			default:
-			}
-			var fn string
-			if len(next) == 0 {
-				break
-			} else if next == "self" {
-				fn = script.GetBrowserScript().GetScript()
-				next = script.GetMeta().GetName()
-			} else {
-				var ok bool
-				if fn, ok = undefinedScripts[next]; !ok {
-					log.Errorf("No such next script: \"%s\"", next)
-					break
-				}
-				annotations := make(map[string]interface{})
-				// add seed annotations
-				for _, b := range seedAnnotations {
-					annotations[b.Key] = b.Value
-				}
-				// add annotations from next browserScript
-				for _, annotation := range undefinedScriptAnnotations[next] {
-					annotations[annotation.Key] = annotation.Value
-				}
-				var currentArguments map[string]interface{}
-				err := json.Unmarshal(arguments, &currentArguments)
-				if err != nil {
-					log.Warn("Failed get ")
-				}
-				// add currentArguments
-				for key, value := range currentArguments {
-					annotations[key] = value
-				}
-				arguments, err = json.Marshal(annotations)
-				if err != nil {
-					log.Errorf("Failed to marshal script annotations")
-					break
-				}
-			}
-			if log.IsLevelEnabled(log.DebugLevel) {
-				args := make(map[string]interface{})
-				err = json.Unmarshal(arguments, &args)
-				if err != nil {
-					log.Errorf("Failed to unmarshal script arguments: %v", err)
-				} else {
-					log.Debugf("Executing script %s(%v) in context %v", next, args, eci)
-				}
-			}
-
-			_, isUpdateEcu := annotations["ecu"]
-			// check if eg. a location change has caused creation of new execution contexts
-			// we want the next script to run in new root context if created
-			if isUpdateEcu && len(sess.ecd) > ecdLength {
-				for _, ecd := range sess.ecd[ecdLength:] {
-					// use the first new execution context created
-					if ecd.Name == "" {
-						eci = ecd.ID
-						break
-					}
-				}
-				ecdLength = len(sess.ecd)
-			}
-
-			result, err := sess.callScript(ctx, eci, fn, arguments)
-			if err != nil {
-				log.Errorf("Failed to call script: %v", err)
-				break
-			}
-			if result == nil {
-				break
-			}
-			var rv ReturnValue
-			err = json.Unmarshal(result, &rv)
-			if err != nil {
-				log.Errorf("Failed to unmarshal return script value: %v", err)
-				break
-			}
-
-			if log.IsLevelEnabled(log.DebugLevel) {
-				var d interface{}
-				err = json.Unmarshal(rv.Data, &d)
-				if err != nil {
-					log.Warnf("Failed to unmarshal script data: %v", err)
-				} else {
-					log.Debugf("Script returned {waitForCompletion: %t, next: %s, data: %+v}", rv.WaitForData, rv.Next, d)
-				}
-			}
-
-			arguments = rv.Data
-			next = rv.Next
-			if rv.WaitForData {
-				log.Trace("Wait for activity after script execution")
-				waitStart := time.Now()
-				_ = sess.netActivityTimer.WaitForCompletion()
-				log.Tracef("Waited %v for network activity to settle", time.Since(waitStart))
-				notifyCount := sess.netActivityTimer.Reset()
-				log.Tracef("Got %d notifications while waiting for network activity to settle", notifyCount)
-			}
-		}
-	}
-}
-
 // cleanWorkspace removes downloaded resources in browser container
 func (sess *Session) cleanWorkspace() {
 	if r, err := http.NewRequest("DELETE", sess.workspaceEndpoint+"/"+strconv.Itoa(sess.Id), nil); err != nil {
@@ -657,6 +481,12 @@ func (sess *Session) saveScreenshot() {
 		return
 	}
 
+	// Check if CrawlLog is present for root request
+	if sess.Requests.RootRequest().CrawlLog == nil {
+		log.Debugf("Page with resource type %v is missing crawlLog for root request, skipping screenshot", sess.Requests.RootRequest().ResourceType)
+		return
+	}
+
 	var data []byte
 	err := chromedp.Run(sess.ctx,
 		chromedp.ActionFunc(func(ctx context.Context) (err error) {
@@ -685,16 +515,20 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 	var extractedUrls []string
 	for _, s := range sess.DbAdapter.GetScripts(sess.BrowserConfig, configV1.BrowserScript_EXTRACT_OUTLINKS) {
 		var res *runtime.RemoteObject
-		var errDetail *runtime.ExceptionDetails
+		var exceptionDetails *runtime.ExceptionDetails
 		err := chromedp.Run(sess.ctx,
 			chromedp.ActionFunc(func(ctx context.Context) (err error) {
-				res, errDetail, err = runtime.Evaluate(s.GetBrowserScript().GetScript()).
+				res, exceptionDetails, err = runtime.Evaluate(s.GetBrowserScript().GetScript()).
 					WithReturnByValue(true).Do(ctx)
 				return err
 			}),
 		)
 		if err != nil {
-			log.Warnf("Failed to evaluate link extractor script: %v %v", err, errDetail)
+			log.Warnf("Failed to evaluate link extractor script: %v", err)
+			continue
+		}
+		if exceptionDetails != nil {
+			log.Warnf("Exception during evaluation of link extractor script: %v", exceptionDetails)
 			continue
 		}
 		if res.Value != nil {
