@@ -18,7 +18,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
@@ -43,15 +42,6 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 			log.Tracef("Request will be sent: %v, %v, %v, %v, %v, %v", ev.RequestID, ev.Type, ev.FrameID, ev.Initiator.Type, ev.LoaderID, ev.DocumentURL)
 			if req := sess.Requests.GetByNetworkId(ev.RequestID.String()); req != nil {
 				req.Initiator = ev.Initiator.Type.String()
-			}
-		case *runtime.EventExecutionContextCreated:
-			sess.ecd = append(sess.ecd, ev.Context)
-			if log.IsLevelEnabled(log.TraceLevel) {
-				var auxData interface{}
-				err := json.Unmarshal(ev.Context.AuxData, &auxData)
-				if err == nil {
-					log.Tracef("execution context created (%d): %s %s %+v", ev.Context.ID, ev.Context.Origin, ev.Context.Name, auxData)
-				}
 			}
 		case *network.EventLoadingFailed:
 			log.Debugf("Loading failed: %v, %v, Reason; %v, Cancel: %v, %v, %v", ev.RequestID, ev.Type, ev.BlockedReason, ev.Canceled, ev.ErrorText, ev.Timestamp.Time())
