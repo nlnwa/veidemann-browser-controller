@@ -13,7 +13,7 @@ COPY . .
 # -ldflags arguments passed to go tool link:
 #   -s disable symbol table
 #   -w disable DWARF generation
-RUN go build -trimpath -ldflags "-s -w" .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" .
 
 FROM gcr.io/distroless/base
 COPY --from=build /build/veidemann-browser-controller /
