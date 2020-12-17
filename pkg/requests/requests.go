@@ -17,7 +17,7 @@
 package requests
 
 import (
-	"github.com/nlnwa/veidemann-api-go/frontier/v1"
+	"github.com/nlnwa/veidemann-api/go/frontier/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/syncx"
 	log "github.com/sirupsen/logrus"
 	"sync"

@@ -18,7 +18,7 @@ package testutil
 
 import (
 	"context"
-	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
+	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
 )
 
 // RobotsEvaluatorMock is a helper structure for mocking robotsevaluator.RobotsEvaluator

@@ -14,15 +14,14 @@ require (
 	github.com/docker/go-units v0.4.0 // indirect
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
-	github.com/golang/protobuf v1.4.2
+	github.com/golang/protobuf v1.4.3
 	github.com/gotestyourself/gotestyourself v2.2.0+incompatible // indirect
-	github.com/grpc-ecosystem/grpc-gateway v1.14.6 // indirect
 	github.com/lib/pq v1.3.0 // indirect
 	github.com/mailru/easyjson v0.7.2
 	github.com/mitchellh/mapstructure v1.3.3 // indirect
-	github.com/nlnwa/veidemann-api-go v1.0.0-beta17
-	github.com/nlnwa/veidemann-recorderproxy v0.2.7
-	github.com/nlnwa/whatwg-url v0.0.0-20200322073154-8c2d737699d5
+	github.com/nlnwa/veidemann-api/go v0.0.0-20201211114104-e5b947faa1a3
+	github.com/nlnwa/veidemann-recorderproxy v0.2.8
+	github.com/nlnwa/whatwg-url v0.1.0
 	github.com/opencontainers/image-spec v1.0.1 // indirect
 	github.com/opencontainers/runc v0.1.1 // indirect
 	github.com/opentracing/opentracing-go v1.2.0
@@ -40,11 +39,7 @@ require (
 	github.com/uber/jaeger-lib v2.2.0+incompatible // indirect
 	go.uber.org/atomic v1.6.0 // indirect
 	golang.org/x/crypto v0.0.0-20200728195943-123391ffb6de // indirect
-	golang.org/x/net v0.0.0-20200707034311-ab3426394381 // indirect
-	golang.org/x/sync v0.0.0-20200625203802-6e8e738ad208
-	golang.org/x/sys v0.0.0-20200802091954-4b90ce9b60b3 // indirect
-	google.golang.org/genproto v0.0.0-20200731012542-8145dea6a485 // indirect
-	google.golang.org/grpc v1.31.0
+	google.golang.org/grpc v1.33.1
 	google.golang.org/protobuf v1.25.0
 	gopkg.in/ini.v1 v1.57.0 // indirect
 	gopkg.in/rethinkdb/rethinkdb-go.v6 v6.2.1

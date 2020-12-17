@@ -19,7 +19,7 @@ package server
 import (
 	"context"
 	"fmt"
-	"github.com/nlnwa/veidemann-api-go/browsercontroller/v1"
+	"github.com/nlnwa/veidemann-api/go/browsercontroller/v1"
 	"reflect"
 	"testing"
 	"time"

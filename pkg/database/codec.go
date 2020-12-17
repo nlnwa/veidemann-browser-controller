@@ -19,8 +19,8 @@ package database
 import (
 	"encoding/json"
 	"fmt"
-	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
-	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
+	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
+	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"gopkg.in/rethinkdb/rethinkdb-go.v6/encoding"

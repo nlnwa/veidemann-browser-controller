@@ -23,7 +23,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/mailru/easyjson"
-	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
+	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/script"
 	log "github.com/sirupsen/logrus"

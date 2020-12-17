@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mailru/easyjson"
-	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
+	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	"testing"
 )
 
@@ -176,7 +176,7 @@ func TestRun(t *testing.T) {
 									Value: "small",
 								},
 								{
-									Key: "v7n_seed-annotation-key",
+									Key:   "v7n_seed-annotation-key",
 									Value: "username",
 								},
 							},

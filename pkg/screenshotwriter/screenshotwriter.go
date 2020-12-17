@@ -20,9 +20,9 @@ import (
 	"context"
 	"crypto/sha1"
 	"fmt"
-	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
-	contentwriterV1 "github.com/nlnwa/veidemann-api-go/contentwriter/v1"
-	"github.com/nlnwa/veidemann-api-go/frontier/v1"
+	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
+	contentwriterV1 "github.com/nlnwa/veidemann-api/go/contentwriter/v1"
+	"github.com/nlnwa/veidemann-api/go/frontier/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	log "github.com/sirupsen/logrus"
 )

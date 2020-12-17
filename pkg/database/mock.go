@@ -17,8 +17,8 @@
 package database
 
 import (
-	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
-	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
+	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
+	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/encoding/protojson"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
@@ -56,7 +56,7 @@ func (c *MockConnection) WriteCrawlLog(crawlLog *frontierV1.CrawlLog) error {
 	if err != nil {
 		log.Println(err)
 	}
-	defer func () {
+	defer func() {
 		_ = f.Close()
 	}()
 
@@ -73,7 +73,7 @@ func (c *MockConnection) WritePageLog(pageLog *frontierV1.PageLog) error {
 	if err != nil {
 		log.Println(err)
 	}
-	defer func () {
+	defer func() {
 		_ = f.Close()
 	}()
 

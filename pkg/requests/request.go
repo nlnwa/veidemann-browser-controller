@@ -17,7 +17,7 @@
 package requests
 
 import (
-	"github.com/nlnwa/veidemann-api-go/frontier/v1"
+	"github.com/nlnwa/veidemann-api/go/frontier/v1"
 )
 
 type Request struct {
