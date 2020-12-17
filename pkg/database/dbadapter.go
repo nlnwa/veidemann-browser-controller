@@ -18,8 +18,8 @@ package database
 
 import (
 	"github.com/golang/protobuf/ptypes"
-	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
-	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
+	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
+	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	log "github.com/sirupsen/logrus"
 	"regexp"
 	"strings"

@@ -19,9 +19,9 @@ package testutil
 import (
 	"context"
 	"fmt"
-	commonsV1 "github.com/nlnwa/veidemann-api-go/commons/v1"
-	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
-	frontierV1 "github.com/nlnwa/veidemann-api-go/frontier/v1"
+	commonsV1 "github.com/nlnwa/veidemann-api/go/commons/v1"
+	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
+	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	"github.com/nlnwa/veidemann-recorderproxy/serviceconnections"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -42,6 +42,7 @@ type OutlinkFunc func(*frontierV1.QueuedUri)
  * Server mocks
  */
 type FrontierMock struct {
+	frontierV1.UnimplementedFrontierServer
 	lis             *bufconn.Listener
 	l               *sync.Mutex
 	contextDialer   grpc.DialOption

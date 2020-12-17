@@ -20,8 +20,8 @@ import (
 	"context"
 	gerr "errors"
 	"fmt"
-	browsercontrollerV1 "github.com/nlnwa/veidemann-api-go/browsercontroller/v1"
-	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
+	browsercontrollerV1 "github.com/nlnwa/veidemann-api/go/browsercontroller/v1"
+	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/errors"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/requests"
@@ -39,6 +39,7 @@ import (
 
 // ApiServer is the gRPC api endpoint for the Browser Controller
 type ApiServer struct {
+	browsercontrollerV1.UnimplementedBrowserControllerServer
 	sessions        *session.Registry
 	ln              net.Listener
 	listenAddr      net.Addr

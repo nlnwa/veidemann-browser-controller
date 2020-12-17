@@ -18,8 +18,8 @@ package robotsevaluator
 
 import (
 	"context"
-	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
-	robotsevaluatorV1 "github.com/nlnwa/veidemann-api-go/robotsevaluator/v1"
+	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
+	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"

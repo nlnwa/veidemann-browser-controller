@@ -18,7 +18,7 @@ package server
 
 import (
 	"context"
-	browsercontrollerV1 "github.com/nlnwa/veidemann-api-go/browsercontroller/v1"
+	browsercontrollerV1 "github.com/nlnwa/veidemann-api/go/browsercontroller/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"time"

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/mailru/easyjson"
-	configV1 "github.com/nlnwa/veidemann-api-go/config/v1"
+	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 )
 
 // seedAnnotationSelectorKey is the key value of a script annotation used for

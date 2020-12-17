@@ -18,7 +18,7 @@ package errors
 
 import (
 	"fmt"
-	commonsV1 "github.com/nlnwa/veidemann-api-go/commons/v1"
+	commonsV1 "github.com/nlnwa/veidemann-api/go/commons/v1"
 )
 
 type FetchError interface {
