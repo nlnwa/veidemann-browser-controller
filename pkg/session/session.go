@@ -244,7 +244,7 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	sess.frameWg = syncx.NewWaitGroup(loadCtx)
 	sess.Requests = requests.NewRegistry(sess.frameWg)
 
-	sess.initListeners(ctx)
+	sess.initListeners(cdpCtx)
 
 	sess.netActivityTimer = syncx.NewCompletionTimer(1*time.Second, maxTotalTime, nil)
 	sess.timer = syncx.NewCompletionTimer(maxIdleTime, maxTotalTime, sess.Requests.MatchCrawlLogs)
@@ -327,22 +327,19 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 
 	fetchDuration := time.Since(fetchStart)
 
+	sess.Requests.FinalizeResponses(sess.RequestedUrl)
+
 	if sess.CrawlConfig.Extra.CreateScreenshot {
 		sess.saveScreenshot()
 	}
-
-	qUris := sess.extractOutlinks()
-	outlinks := make([]string, len(qUris))
-	for i, qUri := range qUris {
-		outlinks[i] = qUri.Uri
-	}
+	outlinks := sess.extractOutlinks()
+	log.Debugf("Found %d outlinks.", len(outlinks))
+	cookies := sess.extractCookies()
 
 	err = chromedp.Cancel(cdpCtx)
 	if err != nil {
 		log.Warnf("Failed closing browser: %v", err)
 	}
-
-	sess.Requests.FinalizeResponses(sess.RequestedUrl)
 
 	var crawlLogCount int32
 	var bytesDownloaded int64
@@ -402,6 +399,18 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		return nil, fmt.Errorf("missing initial request: %w", err)
 	}
 
+	qUris := make([]*frontierV1.QueuedUri, len(outlinks))
+	for i, uri := range outlinks {
+		qUris[i] = &frontierV1.QueuedUri{
+			ExecutionId:         sess.RequestedUrl.ExecutionId,
+			DiscoveredTimeStamp: ptypes.TimestampNow(),
+			Uri:                 uri,
+			DiscoveryPath:       sess.Requests.RootRequest().CrawlLog.DiscoveryPath + "L",
+			Referrer:            sess.Requests.RootRequest().Url,
+			Cookies:             cookies,
+			JobExecutionId:      sess.RequestedUrl.JobExecutionId,
+		}
+	}
 	result = &harvester.RenderResult{
 		BytesDownloaded: bytesDownloaded,
 		UriCount:        crawlLogCount,
@@ -529,8 +538,7 @@ func (sess *Session) saveScreenshot() {
 	}
 }
 
-func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
-	cookies := sess.extractCookies()
+func (sess *Session) extractOutlinks() []string {
 	var extractedUrls []string
 
 	for _, s := range sess.scripts.Get(configV1.BrowserScript_EXTRACT_OUTLINKS) {
@@ -559,8 +567,6 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 				continue
 			}
 
-			log.Debugf("Found %d outlinks.", len(links))
-
 			for _, link := range links {
 				link = strings.TrimSpace(link)
 				link = strings.Trim(link, "\"\\")
@@ -571,21 +577,7 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 		}
 	}
 
-	qUris := make([]*frontierV1.QueuedUri, len(extractedUrls))
-
-	for i, uri := range extractedUrls {
-		qUris[i] = &frontierV1.QueuedUri{
-			ExecutionId:         sess.RequestedUrl.ExecutionId,
-			DiscoveredTimeStamp: ptypes.TimestampNow(),
-			Uri:                 uri,
-			DiscoveryPath:       sess.Requests.RootRequest().CrawlLog.DiscoveryPath + "L",
-			Referrer:            sess.Requests.RootRequest().Url,
-			Cookies:             cookies,
-			JobExecutionId:      sess.RequestedUrl.JobExecutionId,
-		}
-	}
-
-	return qUris
+	return extractedUrls
 }
 
 func (sess *Session) AbortFetch() {
