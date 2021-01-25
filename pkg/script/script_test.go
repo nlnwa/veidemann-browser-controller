@@ -1,7 +1,6 @@
 package script
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,10 +75,8 @@ func TestRun(t *testing.T) {
 	type test struct {
 		// name of test describing it's purpose
 		name string
-		// context given to test run
-		ctx context.Context
 		// seed is the seed which annotations is used as arguments
-		seed configV1.ConfigObject
+		annotations []*configV1.Annotation
 		// scripts is a list of scripts given to a test run
 		scripts []script
 		// seq is the ordered sequence of id's in which scripts are expected to be executed
@@ -95,7 +92,12 @@ func TestRun(t *testing.T) {
 	tests := []test{
 		{
 			name: "script recursion",
-			ctx:  context.Background(),
+			annotations: []*configV1.Annotation{
+				{
+					Key:   "next",
+					Value: "self",
+				},
+			},
 			scripts: []script{
 				{
 					&configV1.ConfigObject{
@@ -150,18 +152,12 @@ func TestRun(t *testing.T) {
 		// test argument precedence: ReturnValue.Data > seed annotations > script annotations
 		{
 			name: "argument precedence",
-			ctx:  context.Background(),
-			seed: configV1.ConfigObject{
-				Kind: configV1.Kind_seed,
-				Meta: &configV1.Meta{
-					Annotation: []*configV1.Annotation{
+			annotations: []*configV1.Annotation{
 						{
 							Key:   "username",
 							Value: "medium",
 						},
 					},
-				},
-			},
 			scripts: []script{
 				{
 					&configV1.ConfigObject{
@@ -173,11 +169,7 @@ func TestRun(t *testing.T) {
 							Annotation: []*configV1.Annotation{
 								{
 									Key:   "username",
-									Value: "small",
-								},
-								{
-									Key:   "v7n_seed-annotation-key",
-									Value: "username",
+									Value: "medium",
 								},
 							},
 						},
@@ -211,9 +203,6 @@ func TestRun(t *testing.T) {
 						{
 							"username": "medium",
 						},
-						{
-							"username": "large",
-						},
 					},
 					returnValues: []ReturnValue{
 						{
@@ -232,7 +221,12 @@ func TestRun(t *testing.T) {
 		},
 		{
 			name: "chained scripts",
-			ctx:  context.Background(),
+			annotations: []*configV1.Annotation{
+				{
+					Key:   "next",
+					Value: "3",
+				},
+			},
 			scripts: []script{
 				{
 					&configV1.ConfigObject{
@@ -294,7 +288,6 @@ func TestRun(t *testing.T) {
 		},
 		{
 			name: "wait for data",
-			ctx:  context.Background(),
 			scripts: []script{
 				{
 					&configV1.ConfigObject{
@@ -323,26 +316,6 @@ func TestRun(t *testing.T) {
 				},
 			},
 		},
-		{
-			name: "cancelled context",
-			ctx: func() context.Context {
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				return ctx
-			}(),
-			scripts: []script{
-				{
-					&configV1.ConfigObject{
-						Id:   "1",
-						Kind: configV1.Kind_browserScript,
-						Meta: &configV1.Meta{Name: "redundant.js"},
-					},
-					nil,
-				},
-			},
-			expectToFail: true,
-			err:          context.Canceled,
-		},
 	}
 
 	//goland:noinspection GoVetCopyLock
@@ -366,7 +339,7 @@ func TestRun(t *testing.T) {
 			name := test.scripts[0].configObject.GetMeta().GetName()
 			waiter := waiters[id]
 
-			err := Run(test.ctx, id, &test.seed, scripts, executor.execute, waiter.wait)
+			err := Run(id, scripts, test.annotations, executor.execute, waiter.wait)
 			if err != nil {
 				if !test.expectToFail {
 					t.Errorf("Script %s failed unexpectedly: %v", name, err)
@@ -475,7 +448,7 @@ func newScriptExecutor(functions map[string]function) *scriptExecutor {
 	}
 }
 
-func (e *scriptExecutor) execute(_ context.Context, script *configV1.ConfigObject, arguments easyjson.RawMessage) (easyjson.RawMessage, error) {
+func (e *scriptExecutor) execute(script *configV1.ConfigObject, arguments easyjson.RawMessage) (easyjson.RawMessage, error) {
 	name := script.GetMeta().GetName()
 	id := script.GetId()
 

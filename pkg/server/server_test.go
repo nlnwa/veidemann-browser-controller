@@ -204,24 +204,34 @@ func setupDbMock() *database.MockConnection {
 				"label":       []map[string]interface{}{{"key": "type", "value": "extract_outlinks"}},
 			},
 			"browserScript": map[string]interface{}{
-				"type": "EXTRACT_OUTLINKS",
-				"script": `var __brzl_framesDone = new Set();
-var __brzl_compileOutlinks = function (frame) {
-    __brzl_framesDone.add(frame);
-    if (frame && frame.document) {
-        var outlinks = Array.prototype.slice.call(frame.document.querySelectorAll('a[href]'));
-        for (var i = 0; i < frame.frames.length; i++) {
-            if (frame.frames[i] && !__brzl_framesDone.has(frame.frames[i])) {
-                try {
-                    outlinks = outlinks.concat(__brzl_compileOutlinks(frame.frames[i]));
-                } catch {
-                }
+				"browserScriptType": "EXTRACT_OUTLINKS",
+				"script": `    (function extractOutlinks(frame) {
+      const framesDone = new Set();
+      function isValid(link) {
+      return (link != null
+            && link.attributes.href.value != ""
+            && link.attributes.href.value != "#"
+            && link.protocol != "tel:"
+            && link.protocol != "mailto:"
+           );
+      }
+      function compileOutlinks(frame) {
+        framesDone.add(frame);
+        if (frame && frame.document) {
+          let outlinks = Array.from(frame.document.links);
+          for (var i = 0; i < frame.frames.length; i++) {
+            if (frame.frames[i] && !framesDone.has(frame.frames[i])) {
+              try {
+                outlinks = outlinks.concat(compileOutlinks(frame.frames[i]));
+              } catch {}
             }
+          }
+          return outlinks;
         }
-    }
-    return outlinks;
-}
-__brzl_compileOutlinks(window).join('\\n');`,
+        return [];
+      }
+      return Array.from(new Set(compileOutlinks(frame).filter(isValid).map(_ => _.href)));
+    })(window);`,
 			},
 		},
 		nil,

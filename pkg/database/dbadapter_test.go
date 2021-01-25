@@ -42,11 +42,11 @@ func (d *dbConnMock) GetConfigsForSelector(kind configV1.Kind, label *configV1.L
 	panic("implement me")
 }
 
-func (d *dbConnMock) GetSeedByUri(qUri *frontier.QueuedUri) (*configV1.ConfigObject, error) {
+func (d *dbConnMock) WriteCrawlLog(crawlLog *frontier.CrawlLog) error {
 	panic("implement me")
 }
 
-func (d *dbConnMock) WriteCrawlLog(crawlLog *frontier.CrawlLog) error {
+func (d *dbConnMock) WriteCrawlLogs(crawlLog []*frontier.CrawlLog) error {
 	panic("implement me")
 }
 

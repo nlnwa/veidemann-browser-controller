@@ -1,16 +1,11 @@
 package script
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/mailru/easyjson"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 )
-
-// seedAnnotationSelectorKey is the key value of a script annotation used for
-// selecting which seed annotations to use as arguments to a script
-var seedAnnotationSelectorKey = "v7n_seed-annotation-key"
 
 // ReturnValue is the return value format for scripts of type
 // ON_LOAD, ON_NEW_DOCUMENT and UNDEFINED.
@@ -43,44 +38,25 @@ func (rv ReturnValue) String() string {
 // executed script (if any). Seed annotations has higher precedence than script
 // annotations and the data field from the return value have highest precedence.
 func Run(
-	ctx context.Context,
-	scriptId string,
-	seed *configV1.ConfigObject,
+	next string,
 	scripts map[string]*configV1.ConfigObject,
-	execute func(context.Context, *configV1.ConfigObject, easyjson.RawMessage) (easyjson.RawMessage, error),
+	annotations []*configV1.Annotation,
+	execute func(*configV1.ConfigObject, easyjson.RawMessage) (easyjson.RawMessage, error),
 	wait func(),
 ) error {
-	next := scriptId
 	var data map[string]interface{}
 
 	for len(next) > 0 {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		var ok bool
 		script, ok := scripts[next]
 		if !ok {
 			return fmt.Errorf("failed to find script with id: %s", next)
 		}
 		name := script.GetMeta().GetName()
 
-		var seedAnnotationSelectors []string
-
 		params := make(map[string]interface{})
-		// add script annotations
-		for _, annotation := range script.GetMeta().GetAnnotation() {
-			if annotation.Key == seedAnnotationSelectorKey {
-				seedAnnotationSelectors = append(seedAnnotationSelectors, annotation.Value)
-			} else {
-				params[annotation.Key] = annotation.Value
-			}
-		}
-		// add seed annotations
-		for _, annotation := range seed.GetMeta().GetAnnotation() {
-			for _, key := range seedAnnotationSelectors {
-				if annotation.Key == key {
+		for _, blueprint := range script.GetMeta().GetAnnotation() {
+			for _, annotation := range annotations {
+				if annotation.Key == blueprint.Key {
 					params[annotation.Key] = annotation.Value
 				}
 			}
@@ -95,7 +71,7 @@ func Run(
 			return fmt.Errorf("failed to marshal script arguments for script %s (%s): %w", name, next, err)
 		}
 
-		res, err := execute(ctx, script, arguments)
+		res, err := execute(script, arguments)
 		if err != nil {
 			return fmt.Errorf("failed to execute script %s (%s): %w", name, next, err)
 		}

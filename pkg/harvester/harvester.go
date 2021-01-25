@@ -28,7 +28,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"io"
 	"strconv"
-	"sync"
 )
 
 type RenderResult struct {
@@ -70,7 +69,7 @@ func (h *harvester) Close() {
 }
 
 func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
-	harvestCtx, cancel := context.WithCancel(context.Background())
+	harvestCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	stream, err := h.client.GetNextPage(harvestCtx)
@@ -78,47 +77,35 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 		return fmt.Errorf("failed to get the frontier GetNextPage client: %w", err)
 	}
 
-	errc := make(chan error)
-	waitn := make(chan struct{}) // Closed when initial response from Frontier is received
+	err = stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_RequestNextPage{RequestNextPage: true}})
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to send request for new page to frontier: %w", err)
+	}
 	var harvestSpec *frontierV1.PageHarvestSpec
+	harvestSpec, err = stream.Recv()
+	if err != nil {
+		return fmt.Errorf("failed to get page harvest spec: %w", err)
+	}
+
+	errc := make(chan error)
 	go func() {
-		once := new(sync.Once)
 		for {
-			var err error
-			harvestSpec, err = stream.Recv()
+			_, err := stream.Recv()
 			if err == io.EOF {
 				// stream completed
 				close(errc)
 				return
 			}
 			if err != nil {
-				errc <- fmt.Errorf("failed to receive response from frontier: %w", err)
+				errc <- err
 				return
 			}
-			once.Do(func() {
-				close(waitn)
-			})
 		}
 	}()
-	go func() {
-		err := stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_RequestNextPage{RequestNextPage: true}})
-		// If the error is not io.EOF it is a client side error, else the status is read by stream.Recv above.
-		if err != nil && err != io.EOF {
-			errc <- fmt.Errorf("failed to send request for new page to frontier: %w", err)
-		}
-	}()
-	select {
-	case <-ctx.Done():
-		// ctx cancelled while requesting next page
-		return ctx.Err()
-	case err := <-errc:
-		return err
-	case <-waitn:
-		// initial request received
-	}
 
 	log.WithField("uri", harvestSpec.QueuedUri.Uri).Tracef("Starting fetch")
 	metrics.ActiveBrowserSessions.Inc()
+	defer metrics.ActiveBrowserSessions.Dec()
 	metrics.PagesTotal.Inc()
 	renderResult, err := fetch(harvestSpec.QueuedUri, harvestSpec.CrawlConfig)
 	if err != nil {
@@ -126,18 +113,18 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 		renderResult = &RenderResult{
 			Error: errors.CommonsError(err),
 		}
-	} else if renderResult.PageFetchTimeMs > 0 {
-		metrics.PageFetchSeconds.Observe(float64(renderResult.PageFetchTimeMs / 1000))
-	}
-
-	if renderResult.Error != nil {
+		metrics.PagesFailedTotal.WithLabelValues(strconv.Itoa(int(renderResult.Error.Code))).Inc()
 		err := stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_Error{Error: renderResult.Error}})
 		if err != nil {
-			metrics.PagesFailedTotal.WithLabelValues(strconv.Itoa(int(renderResult.Error.Code))).Inc()
-			metrics.ActiveBrowserSessions.Dec()
+			if err != io.EOF {
+				err = <-errc
+			}
 			return fmt.Errorf("failed to send error response to Frontier: %w", err)
 		}
 	} else {
+		if renderResult.PageFetchTimeMs > 0 {
+			metrics.PageFetchSeconds.Observe(float64(renderResult.PageFetchTimeMs / 1000))
+		}
 		err := stream.Send(&frontierV1.PageHarvest{
 			Msg: &frontierV1.PageHarvest_Metrics_{
 				Metrics: &frontierV1.PageHarvest_Metrics{
@@ -147,18 +134,23 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 			},
 		})
 		if err != nil {
+			if err == io.EOF {
+				err = <-errc
+			}
 			return fmt.Errorf("failed to send metrics to Frontier: %w", err)
 		}
 
 		for _, outlink := range renderResult.Outlinks {
-			if err := stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_Outlink{Outlink: outlink}}); err != nil {
-				metrics.ActiveBrowserSessions.Dec()
+			err := stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_Outlink{Outlink: outlink}})
+			if err != nil {
+				if err == io.EOF {
+					err = <-errc
+				}
 				return fmt.Errorf("failed to send outlink to Frontier: %w", err)
 			}
 		}
 	}
 
-	metrics.ActiveBrowserSessions.Dec()
 	if err := stream.CloseSend(); err != nil {
 		return fmt.Errorf("failed to close send: %w", err)
 	}

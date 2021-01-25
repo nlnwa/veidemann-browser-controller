@@ -72,11 +72,11 @@ type Session struct {
 	timer             *syncx.CompletionTimer
 	RequestedUrl      *frontierV1.QueuedUri
 	CrawlConfig       *configV1.CrawlConfig
-	BrowserConfig     *configV1.BrowserConfig
+	browserConfig     *configV1.BrowserConfig
 	PolitenessConfig  *configV1.ConfigObject
 	DbAdapter         *database.DbAdapter
 	screenShotWriter  screenshotwriter.ScreenshotWriter
-	WriteScreenshot   func(ctx context.Context, sess *Session, data []byte) error
+	scripts           *sessionScripts
 }
 
 func newDefaultSession(opts ...Option) *Session {
@@ -195,15 +195,21 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	if err != nil {
 		return nil, fmt.Errorf("failed to get browser config: %v", err)
 	}
-	sess.BrowserConfig = bConf.GetBrowserConfig()
+	sess.browserConfig = bConf.GetBrowserConfig()
 
 	sess.PolitenessConfig, err = sess.DbAdapter.GetConfigObject(sess.CrawlConfig.PolitenessRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get politeness config: %v", err)
 	}
 
-	maxTotalTime := time.Duration(sess.BrowserConfig.PageLoadTimeoutMs) * time.Millisecond
-	maxIdleTime := time.Duration(sess.BrowserConfig.MaxInactivityTimeMs) * time.Millisecond
+	maxTotalTime := time.Duration(sess.browserConfig.PageLoadTimeoutMs) * time.Millisecond
+	maxIdleTime := time.Duration(sess.browserConfig.MaxInactivityTimeMs) * time.Millisecond
+
+	if scripts, err := sess.loadScripts(); err != nil {
+		return nil, fmt.Errorf("failed to load scripts: %w", err)
+	} else {
+		sess.scripts = scripts
+	}
 
 	allocatorContext, allocatorCancel := chromedp.NewRemoteAllocator(context.Background(), sess.browserWsEndpoint)
 	defer allocatorCancel()
@@ -236,7 +242,7 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	sess.netActivityTimer = syncx.NewCompletionTimer(1*time.Second, maxTotalTime, nil)
 	sess.timer = syncx.NewCompletionTimer(maxIdleTime, maxTotalTime, sess.Requests.MatchCrawlLogs)
 
-	sess.UserAgent = sess.BrowserConfig.UserAgent
+	sess.UserAgent = sess.browserConfig.UserAgent
 	if sess.UserAgent == "" {
 		sess.UserAgent = strings.ReplaceAll(userAgent, "HeadlessChrome", "Chrome")
 	}
@@ -244,8 +250,8 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	deviceInfo := &device.Info{
 		Name:      "Desktop",
 		UserAgent: sess.UserAgent,
-		Width:     int64(sess.BrowserConfig.WindowWidth),
-		Height:    int64(sess.BrowserConfig.WindowHeight),
+		Width:     int64(sess.browserConfig.WindowWidth),
+		Height:    int64(sess.browserConfig.WindowHeight),
 		Scale:     1,
 		Landscape: false,
 		Mobile:    false,
@@ -319,13 +325,11 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	var crawlLogCount int32
 	var bytesDownloaded int64
 	var resources []*frontierV1.PageLog_Resource
+	var crawlLogs []*frontierV1.CrawlLog
 
 	sess.Requests.Walk(func(r *requests.Request) {
 		if r.CrawlLog != nil && r.CrawlLog.WarcId != "" {
-			if err := sess.DbAdapter.WriteCrawlLog(r.CrawlLog); err != nil {
-				log.Errorf("Error writing crawlLog: %v", err)
-				return
-			}
+			crawlLogs = append(crawlLogs, r.CrawlLog)
 			crawlLogCount++
 			bytesDownloaded += r.CrawlLog.Size
 		} else {
@@ -351,6 +355,9 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 			log.Warnf("No crawllog for resource. Skipping %v %v %v. Got new: %v, Got complete %v", r.RequestId, r.Method, r.Url, r.GotNew, r.GotComplete)
 		}
 	})
+	if err := sess.DbAdapter.WriteCrawlLogs(crawlLogs); err != nil {
+		log.Errorf("Error writing crawlLogs: %v", err)
+	}
 
 	if sess.CrawlConfig.Extra.CreateScreenshot {
 		sess.saveScreenshot()
@@ -501,7 +508,7 @@ func (sess *Session) saveScreenshot() {
 	metadata := screenshotwriter.Metadata{
 		CrawlConfig:    sess.CrawlConfig,
 		CrawlLog:       sess.Requests.RootRequest().CrawlLog,
-		BrowserConfig:  sess.BrowserConfig,
+		BrowserConfig:  sess.browserConfig,
 		BrowserVersion: sess.BrowserVersion,
 	}
 	if err = sess.screenShotWriter.Write(sess.ctx, data, metadata); err != nil {
@@ -513,7 +520,8 @@ func (sess *Session) saveScreenshot() {
 func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 	cookies := sess.extractCookies()
 	var extractedUrls []string
-	for _, s := range sess.DbAdapter.GetScripts(sess.BrowserConfig, configV1.BrowserScript_EXTRACT_OUTLINKS) {
+
+	for _, s := range sess.scripts.Get(configV1.BrowserScript_EXTRACT_OUTLINKS) {
 		var res *runtime.RemoteObject
 		var exceptionDetails *runtime.ExceptionDetails
 		err := chromedp.Run(sess.ctx,

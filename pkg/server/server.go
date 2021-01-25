@@ -22,11 +22,11 @@ import (
 	"fmt"
 	browsercontrollerV1 "github.com/nlnwa/veidemann-api/go/browsercontroller/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/errors"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/requests"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/robotsevaluator"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/url"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -223,7 +223,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 					}
 					continue
 				case "OPTIONS":
-					Url := database.NormalizeUrl(v.New.Uri)
+					Url := url.Normalize(v.New.Uri)
 					req = sess.Requests.GetByUrl(Url, true)
 					if req == nil {
 						log.Debugf("No new request found for %v %v %v. Has fulfilled request: %v", v.New.RequestId, v.New.Method, Url, sess.Requests.GetByUrl(Url, false) != nil)
@@ -262,7 +262,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				JobExecutionId:   sess.RequestedUrl.JobExecutionId,
 				CollectionRef:    sess.CrawlConfig.CollectionRef,
 			}
-			replacementScript := sess.DbAdapter.GetReplacementScript(sess.BrowserConfig, v.New.Uri)
+			replacementScript := sess.GetReplacementScript(v.New.Uri)
 			if replacementScript != nil {
 				reply.ReplacementScript = replacementScript
 			}
