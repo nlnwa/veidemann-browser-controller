@@ -18,14 +18,20 @@ patchesJson6902:
       name: veidemann-harvester
       version: v1
       group: apps
-    path: deployment_secret_patch.yaml
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/envFrom/0/secretRef/name
+        value: skaffold-veidemann-browser-controller-rethinkdb
+
+      - op: replace
+        path: /spec/template/spec/volumes/3/secret/secretName
+        value: skaffold-veidemann-browser-controller-cache-cert
 
 secretGenerator:
-  - name: skaffold-browser-controller-rethinkdb-env
-    literals:
-      - DB_USER=admin
-      - DB_PASSWORD=rethinkdb
-  - name: skaffold-browser-controller-veidemann-cache
+  - name: skaffold-veidemann-browser-controller-rethinkdb
+    envs:
+      - .env
+  - name: skaffold-veidemann-browser-controller-cache-cert
     type: Opaque
     files:
       - cert/cache-selfsigned.key
