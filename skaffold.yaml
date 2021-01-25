@@ -1,12 +1,9 @@
-apiVersion: skaffold/v2beta6
+apiVersion: skaffold/v2beta11
 kind: Config
 build:
-  local:
-    push: false
   artifacts:
     - image: norsknettarkiv/veidemann-browser-controller
 deploy:
   kustomize:
     paths:
       - k8s
-

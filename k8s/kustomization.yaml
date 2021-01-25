@@ -10,7 +10,7 @@ resources:
   - github.com/nlnwa/veidemann/bases/veidemann-harvester
 
 patchesStrategicMerge:
-  - deployment_log_level_patch.yaml
+  - deployment_env_patch.yaml
 
 patchesJson6902:
   - target:
