@@ -17,6 +17,7 @@
 package main
 
 import (
+	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/controller"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/harvester"
@@ -31,6 +32,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"google.golang.org/grpc"
 	"os"
 	"os/signal"
 	"strings"
@@ -133,6 +135,7 @@ func main() {
 		serviceconnections.WithConnectTimeout(connectTimeout),
 		serviceconnections.WithHost(viper.GetString("frontier-host")),
 		serviceconnections.WithPort(viper.GetInt("frontier-port")),
+		serviceconnections.WithDialOptions(grpc.WithStreamInterceptor(otgrpc.OpenTracingStreamClientInterceptor(tracer))),
 	)
 	if err := harvester.Connect(); err != nil {
 		log.WithError(err).Error()

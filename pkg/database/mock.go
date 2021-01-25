@@ -17,6 +17,7 @@
 package database
 
 import (
+	"context"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	log "github.com/sirupsen/logrus"
@@ -54,7 +55,7 @@ func (c *MockConnection) GetMock() *r.Mock {
 	return c.dbSession.(*r.Mock)
 }
 
-func (c *MockConnection) WriteCrawlLogs(crawlLogs []*frontierV1.CrawlLog) error {
+func (c *MockConnection) WriteCrawlLogs(ctx context.Context, crawlLogs []*frontierV1.CrawlLog) error {
 	f, err := os.OpenFile("crawl.log",
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -70,14 +71,14 @@ func (c *MockConnection) WriteCrawlLogs(crawlLogs []*frontierV1.CrawlLog) error 
 		}
 	}
 
-	return c.connection.WriteCrawlLogs(crawlLogs)
+	return c.connection.WriteCrawlLogs(ctx, crawlLogs)
 }
 
-func (c *MockConnection) WriteCrawlLog(crawlLog *frontierV1.CrawlLog) error {
-	return c.WriteCrawlLogs([]*frontierV1.CrawlLog{crawlLog})
+func (c *MockConnection) WriteCrawlLog(ctx context.Context, crawlLog *frontierV1.CrawlLog) error {
+	return c.WriteCrawlLogs(ctx, []*frontierV1.CrawlLog{crawlLog})
 }
 
-func (c *MockConnection) WritePageLog(pageLog *frontierV1.PageLog) error {
+func (c *MockConnection) WritePageLog(ctx context.Context, pageLog *frontierV1.PageLog) error {
 	f, err := os.OpenFile("page.log",
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -90,13 +91,13 @@ func (c *MockConnection) WritePageLog(pageLog *frontierV1.PageLog) error {
 	if _, err := f.WriteString(protojson.Format(pageLog) + "\n"); err != nil {
 		log.Println(err)
 	}
-	return c.connection.WritePageLog(pageLog)
+	return c.connection.WritePageLog(ctx, pageLog)
 }
 
-func (c *MockConnection) GetConfig(ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
-	return c.connection.GetConfig(ref)
+func (c *MockConnection) GetConfig(ctx context.Context, ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
+	return c.connection.GetConfig(ctx, ref)
 }
 
-func (c *MockConnection) GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
-	return c.connection.GetConfigsForSelector(kind, label)
+func (c *MockConnection) GetConfigsForSelector(ctx context.Context, kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
+	return c.connection.GetConfigsForSelector(ctx, kind, label)
 }

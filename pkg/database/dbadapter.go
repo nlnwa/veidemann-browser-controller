@@ -17,6 +17,7 @@
 package database
 
 import (
+	"context"
 	"fmt"
 	"github.com/golang/protobuf/ptypes"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
@@ -102,11 +103,11 @@ func (c *cache) GetMany(key string) []*configV1.ConfigObject {
 type DbConnection interface {
 	Connect() error
 	Close() error
-	GetConfig(ref *configV1.ConfigRef) (*configV1.ConfigObject, error)
-	GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error)
-	WriteCrawlLog(crawlLog *frontierV1.CrawlLog) error
-	WriteCrawlLogs(crawlLogs []*frontierV1.CrawlLog) error
-	WritePageLog(pageLog *frontierV1.PageLog) error
+	GetConfig(ctx context.Context, ref *configV1.ConfigRef) (*configV1.ConfigObject, error)
+	GetConfigsForSelector(ctx context.Context, kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error)
+	WriteCrawlLog(ctx context.Context, crawlLog *frontierV1.CrawlLog) error
+	WriteCrawlLogs(ctx context.Context, crawlLogs []*frontierV1.CrawlLog) error
+	WritePageLog(ctx context.Context, pageLog *frontierV1.PageLog) error
 }
 
 type DbAdapter struct {
@@ -122,13 +123,13 @@ func NewDbAdapter(db DbConnection, ttl time.Duration) *DbAdapter {
 	}
 }
 
-func (cc *DbAdapter) GetConfigObject(ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
+func (cc *DbAdapter) GetConfigObject(ctx context.Context, ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
 	cached := cc.cache.Get(ref.Id)
 	if cached != nil {
 		return cached, nil
 	}
 
-	result, err := cc.db.GetConfig(ref)
+	result, err := cc.db.GetConfig(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +140,7 @@ func (cc *DbAdapter) GetConfigObject(ref *configV1.ConfigRef) (*configV1.ConfigO
 }
 
 // fetch configObjects by selector string (key:value)
-func (cc *DbAdapter) getConfigsForSelector(selector string) ([]*configV1.ConfigObject, error) {
+func (cc *DbAdapter) getConfigsForSelector(ctx context.Context, selector string) ([]*configV1.ConfigObject, error) {
 	cached := cc.cache.GetMany(selector)
 	if cached != nil {
 		return cached, nil
@@ -151,7 +152,7 @@ func (cc *DbAdapter) getConfigsForSelector(selector string) ([]*configV1.ConfigO
 		Value: t[1],
 	}
 
-	res, err := cc.db.GetConfigsForSelector(configV1.Kind_browserScript, label)
+	res, err := cc.db.GetConfigsForSelector(ctx, configV1.Kind_browserScript, label)
 	if err != nil {
 		return nil, err
 	}
@@ -160,17 +161,17 @@ func (cc *DbAdapter) getConfigsForSelector(selector string) ([]*configV1.ConfigO
 	return res, nil
 }
 
-func (cc *DbAdapter) GetScripts(browserConfig *configV1.BrowserConfig) ([]*configV1.ConfigObject, error) {
+func (cc *DbAdapter) GetScripts(ctx context.Context, browserConfig *configV1.BrowserConfig) ([]*configV1.ConfigObject, error) {
 	var scripts []*configV1.ConfigObject
 	for _, scriptRef := range browserConfig.ScriptRef {
-		script, err := cc.GetConfigObject(scriptRef)
+		script, err := cc.GetConfigObject(ctx, scriptRef)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get script by reference %v: %w", scriptRef, err)
 		}
 		scripts = append(scripts, script)
 	}
 	for _, selector := range browserConfig.ScriptSelector {
-		configs, err := cc.getConfigsForSelector(selector)
+		configs, err := cc.getConfigsForSelector(ctx, selector)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get scripts by selector %s: %w", selector, err)
 		}
@@ -181,21 +182,17 @@ func (cc *DbAdapter) GetScripts(browserConfig *configV1.BrowserConfig) ([]*confi
 	return scripts, nil
 }
 
-func isType(object *configV1.ConfigObject, browserScriptType configV1.BrowserScript_BrowserScriptType) bool {
-	return object.GetBrowserScript().BrowserScriptType == browserScriptType
+func (cc *DbAdapter) WriteCrawlLog(ctx context.Context, crawlLog *frontierV1.CrawlLog) error {
+	return cc.WriteCrawlLogs(ctx, []*frontierV1.CrawlLog{crawlLog})
 }
 
-func (cc *DbAdapter) WriteCrawlLog(crawlLog *frontierV1.CrawlLog) error {
-	return cc.WriteCrawlLogs([]*frontierV1.CrawlLog{crawlLog})
-}
-
-func (cc *DbAdapter) WriteCrawlLogs(crawlLogs []*frontierV1.CrawlLog) error {
+func (cc *DbAdapter) WriteCrawlLogs(ctx context.Context, crawlLogs []*frontierV1.CrawlLog) error {
 	for _, crawlLog := range crawlLogs {
 		crawlLog.TimeStamp = ptypes.TimestampNow()
 	}
-	return cc.db.WriteCrawlLogs(crawlLogs)
+	return cc.db.WriteCrawlLogs(ctx, crawlLogs)
 }
 
-func (cc *DbAdapter) WritePageLog(pageLog *frontierV1.PageLog) error {
-	return cc.db.WritePageLog(pageLog)
+func (cc *DbAdapter) WritePageLog(ctx context.Context, pageLog *frontierV1.PageLog) error {
+	return cc.db.WritePageLog(ctx, pageLog)
 }

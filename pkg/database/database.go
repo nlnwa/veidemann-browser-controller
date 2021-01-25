@@ -21,7 +21,6 @@ import (
 	"fmt"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
-	"github.com/opentracing/opentracing-go"
 	log "github.com/sirupsen/logrus"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
 	"time"
@@ -65,7 +64,7 @@ func NewConnection(opts Options) DbConnection {
 		},
 		maxRetries:   3,
 		waitTimeout:  60 * time.Second,
-		queryTimeout: time.Duration(opts.QueryTimeout) * time.Second,
+		queryTimeout: opts.QueryTimeout,
 		logger:       log.WithField("component", "database"),
 	}
 }
@@ -89,9 +88,9 @@ func (c *connection) Close() error {
 	return c.dbSession.(*r.Session).Close()
 }
 
-func (c *connection) GetConfig(ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
+func (c *connection) GetConfig(ctx context.Context, ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
 	term := r.Table("config").Get(ref.Id)
-	res, err := c.execRead("get-config-object", &term)
+	res, err := c.execRead(ctx, "get-config-object", &term)
 	if err != nil {
 		return nil, err
 	}
@@ -104,12 +103,12 @@ func (c *connection) GetConfig(ref *configV1.ConfigRef) (*configV1.ConfigObject,
 	return &result, nil
 }
 
-func (c *connection) GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
+func (c *connection) GetConfigsForSelector(ctx context.Context, kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
 	term := r.Table("config").GetAllByIndex("label", r.Expr([]string{label.Key, label.Value})).
 		Filter(func(row r.Term) r.Term {
 			return row.Field("kind").Eq(kind.String())
 		})
-	res, err := c.execRead("get-configs-by-label", &term)
+	res, err := c.execRead(ctx, "get-configs-by-label", &term)
 	if err != nil {
 		return nil, err
 	}
@@ -131,33 +130,33 @@ func (c *connection) GetConfigsForSelector(kind configV1.Kind, label *configV1.L
 	return configObjects, nil
 }
 
-func (c *connection) WriteCrawlLog(crawlLog *frontierV1.CrawlLog) error {
-	return c.WriteCrawlLogs([]*frontierV1.CrawlLog{crawlLog})
+func (c *connection) WriteCrawlLog(ctx context.Context, crawlLog *frontierV1.CrawlLog) error {
+	return c.WriteCrawlLogs(ctx, []*frontierV1.CrawlLog{crawlLog})
 }
 
-func (c *connection) WriteCrawlLogs(crawlLogs []*frontierV1.CrawlLog) error {
+func (c *connection) WriteCrawlLogs(ctx context.Context, crawlLogs []*frontierV1.CrawlLog) error {
 	term := r.Table("crawl_log").Insert(crawlLogs)
-	return c.execWrite("write-crawl-log(s)", &term)
+	return c.execWrite(ctx, "write-crawl-log(s)", &term)
 }
 
-func (c *connection) WritePageLog(pageLog *frontierV1.PageLog) error {
+func (c *connection) WritePageLog(ctx context.Context, pageLog *frontierV1.PageLog) error {
 	term := r.Table("page_log").Insert(pageLog)
-	return c.execWrite("write-page-log", &term)
+	return c.execWrite(ctx, "write-page-log", &term)
 }
 
 // execRead executes the given read term with a timeout
-func (c *connection) execRead(name string, term *r.Term) (*r.Cursor, error) {
+func (c *connection) execRead(ctx context.Context, name string, term *r.Term) (*r.Cursor, error) {
 	q := func(ctx context.Context) (*r.Cursor, error) {
 		runOpts := r.RunOpts{
 			Context: ctx,
 		}
 		return term.Run(c.dbSession, runOpts)
 	}
-	return c.execWithRetry(name, q)
+	return c.execWithRetry(ctx, name, q)
 }
 
 // execWrite executes the given write term with a timeout
-func (c *connection) execWrite(name string, term *r.Term) error {
+func (c *connection) execWrite(ctx context.Context, name string, term *r.Term) error {
 	q := func(ctx context.Context) (*r.Cursor, error) {
 		runOpts := r.RunOpts{
 			Context:    ctx,
@@ -166,17 +165,17 @@ func (c *connection) execWrite(name string, term *r.Term) error {
 		_, err := (*term).RunWrite(c.dbSession, runOpts)
 		return nil, err
 	}
-	_, err := c.execWithRetry(name, q)
+	_, err := c.execWithRetry(ctx, name, q)
 	return err
 }
 
 // execWithRetry executes given query function repeatedly until successful or max retry limit is reached
-func (c *connection) execWithRetry(name string, q func(ctx context.Context) (*r.Cursor, error)) (cursor *r.Cursor, err error) {
+func (c *connection) execWithRetry(ctx context.Context, name string, q func(ctx context.Context) (*r.Cursor, error)) (cursor *r.Cursor, err error) {
 	attempts := 0
 out:
 	for {
 		attempts++
-		cursor, err = c.exec(name, q)
+		cursor, err = c.exec(ctx, q)
 		if err == nil {
 			return
 		}
@@ -205,17 +204,10 @@ out:
 	return nil, fmt.Errorf("failed to %s after %d of %d attempts: %w", name, attempts, c.maxRetries+1, err)
 }
 
-// exec executes the given query using a timeout
-//
-// A tracing span is created if configured
-func (c *connection) exec(name string, q func(ctx context.Context) (*r.Cursor, error)) (*r.Cursor, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.queryTimeout)
+// exec executes the given query with a timeout
+func (c *connection) exec(ctx context.Context, q func(ctx context.Context) (*r.Cursor, error)) (*r.Cursor, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
-	if c.dbConnectOpts.UseOpentracing {
-		span := opentracing.GlobalTracer().StartSpan(name)
-		ctx = opentracing.ContextWithSpan(ctx, span)
-		defer span.Finish()
-	}
 	return q(ctx)
 }
 

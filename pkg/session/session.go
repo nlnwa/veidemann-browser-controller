@@ -41,6 +41,8 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/syncx"
 	"github.com/nlnwa/whatwg-url/url"
+	"github.com/opentracing/opentracing-go"
+	tracelog "github.com/opentracing/opentracing-go/log"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -187,17 +189,22 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		}
 	}()
 
+	span := opentracing.StartSpan("fetch")
+	defer span.Finish()
+	span.LogFields(tracelog.String("uri", QUri.Uri))
+	ctx := opentracing.ContextWithSpan(context.Background(), span)
+
 	log.WithField("eid", QUri.ExecutionId).Infof("Start fetch of %v", QUri.Uri)
 	sess.RequestedUrl = QUri
 	sess.CrawlConfig = crawlConf.GetCrawlConfig()
 
-	bConf, err := sess.DbAdapter.GetConfigObject(sess.CrawlConfig.BrowserConfigRef)
+	bConf, err := sess.DbAdapter.GetConfigObject(ctx, sess.CrawlConfig.BrowserConfigRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get browser config: %v", err)
 	}
 	sess.browserConfig = bConf.GetBrowserConfig()
 
-	sess.PolitenessConfig, err = sess.DbAdapter.GetConfigObject(sess.CrawlConfig.PolitenessRef)
+	sess.PolitenessConfig, err = sess.DbAdapter.GetConfigObject(ctx, sess.CrawlConfig.PolitenessRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get politeness config: %v", err)
 	}
@@ -205,23 +212,23 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	maxTotalTime := time.Duration(sess.browserConfig.PageLoadTimeoutMs) * time.Millisecond
 	maxIdleTime := time.Duration(sess.browserConfig.MaxInactivityTimeMs) * time.Millisecond
 
-	if scripts, err := sess.loadScripts(); err != nil {
+	if scripts, err := sess.loadScripts(ctx); err != nil {
 		return nil, fmt.Errorf("failed to load scripts: %w", err)
 	} else {
 		sess.scripts = scripts
 	}
 
-	allocatorContext, allocatorCancel := chromedp.NewRemoteAllocator(context.Background(), sess.browserWsEndpoint)
+	allocatorContext, allocatorCancel := chromedp.NewRemoteAllocator(ctx, sess.browserWsEndpoint)
 	defer allocatorCancel()
 
 	// create context
-	ctx, cancel := chromedp.NewContext(allocatorContext)
-	defer cancel()
-	sess.ctx = ctx
+	cdpCtx, cdpCancel := chromedp.NewContext(allocatorContext)
+	defer cdpCancel()
+	sess.ctx = cdpCtx
 
 	// ensure the first tab is created
 	var userAgent string
-	if err := chromedp.Run(ctx,
+	if err := chromedp.Run(sess.ctx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_, sess.BrowserVersion, _, userAgent, _, err = browser.GetVersion().Do(ctx)
 			return err
@@ -259,7 +266,7 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	}
 
 	// run task list
-	if err := chromedp.Run(ctx,
+	if err := chromedp.Run(sess.ctx,
 		security.SetIgnoreCertificateErrors(true),
 		network.SetCacheDisabled(true),
 		serviceworker.Enable(),
@@ -320,6 +327,21 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 
 	fetchDuration := time.Since(fetchStart)
 
+	if sess.CrawlConfig.Extra.CreateScreenshot {
+		sess.saveScreenshot()
+	}
+
+	qUris := sess.extractOutlinks()
+	outlinks := make([]string, len(qUris))
+	for i, qUri := range qUris {
+		outlinks[i] = qUri.Uri
+	}
+
+	err = chromedp.Cancel(cdpCtx)
+	if err != nil {
+		log.Warnf("Failed closing browser: %v", err)
+	}
+
 	sess.Requests.FinalizeResponses(sess.RequestedUrl)
 
 	var crawlLogCount int32
@@ -355,23 +377,8 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 			log.Warnf("No crawllog for resource. Skipping %v %v %v. Got new: %v, Got complete %v", r.RequestId, r.Method, r.Url, r.GotNew, r.GotComplete)
 		}
 	})
-	if err := sess.DbAdapter.WriteCrawlLogs(crawlLogs); err != nil {
+	if err := sess.DbAdapter.WriteCrawlLogs(ctx, crawlLogs); err != nil {
 		log.Errorf("Error writing crawlLogs: %v", err)
-	}
-
-	if sess.CrawlConfig.Extra.CreateScreenshot {
-		sess.saveScreenshot()
-	}
-
-	qUris := sess.extractOutlinks()
-	outlinks := make([]string, len(qUris))
-	for i, qUri := range qUris {
-		outlinks[i] = qUri.Uri
-	}
-
-	err = chromedp.Cancel(ctx)
-	if err != nil {
-		log.Warnf("Failed closing browser: %v", err)
 	}
 
 	if sess.Requests.InitialRequest() != nil && sess.Requests.InitialRequest().CrawlLog != nil {
@@ -386,7 +393,7 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 			Resource:            resources,
 			Outlink:             outlinks,
 		}
-		if err := sess.DbAdapter.WritePageLog(pageLog); err != nil {
+		if err := sess.DbAdapter.WritePageLog(ctx, pageLog); err != nil {
 			return nil, fmt.Errorf("error writing pageLog: %w", err)
 		} else {
 			log.WithField("uri", sess.RequestedUrl.Uri).Debugf("Pagelog written")
@@ -402,6 +409,11 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		Error:           sess.Requests.InitialRequest().CrawlLog.Error,
 		PageFetchTimeMs: fetchDuration.Milliseconds(),
 	}
+	span.LogFields(
+		tracelog.Int64("pageFetchTimeMs", result.PageFetchTimeMs),
+		tracelog.Int32("uriCount", result.UriCount),
+		tracelog.Int64("bytesDownloaded", result.BytesDownloaded),
+	)
 
 	sess.cleanWorkspace()
 	log.Debugf("Fetch done: %v", QUri.Uri)

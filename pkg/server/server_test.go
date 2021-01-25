@@ -300,29 +300,3 @@ func setupBrowser(pool *dockertest.Pool) (container *dockertest.Resource, port i
 	}
 	return
 }
-
-func setupRobotsEvaluator(pool *dockertest.Pool) (container *dockertest.Resource, port int) {
-	var err error
-	// pulls an image, creates a container based on it and runs it
-	container, err = pool.Run("norsknettarkiv/veidemann-robotsevaluator-service", "0.3.8", []string{})
-	if err != nil {
-		log.Fatalf("Could not start robotsContainer: %s", err)
-	}
-
-	port, err = strconv.Atoi(container.GetPort("7053/tcp"))
-	if err != nil {
-		log.Fatalf("Could not get port for robotsContainer: %s", err)
-	}
-
-	// exponential backoff-retry, because the application in the container might not be ready to accept connections yet
-	if err := pool.Retry(func() error {
-		_, err := http.Head("http://localhost:" + container.GetPort("7053/tcp"))
-		if err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
-		log.Fatalf("Could not connect to docker: %s", err)
-	}
-	return
-}

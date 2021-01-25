@@ -288,7 +288,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 			if req == nil {
 				if sess.Id == 0 {
 					if !v.Completed.Cached && v.Completed.CrawlLog != nil && v.Completed.CrawlLog.WarcId != "" {
-						if err := sess.DbAdapter.WriteCrawlLog(v.Completed.CrawlLog); err != nil {
+						if err := sess.DbAdapter.WriteCrawlLog(context.Background(), v.Completed.CrawlLog); err != nil {
 							log.Errorf("Failed writing crawlLog for direct session: %v", err)
 						}
 					}
