@@ -112,9 +112,6 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 			err = fetchError
 		}
 	}()
-	streamSpan, _ := opentracing.StartSpanFromContext(stream.Context(), "do")
-	streamSpan.SetTag("component", "server")
-	defer streamSpan.Finish()
 
 	var span opentracing.Span
 	defer func() {

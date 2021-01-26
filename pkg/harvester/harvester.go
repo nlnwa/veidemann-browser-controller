@@ -93,10 +93,10 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 		span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 		return fmt.Errorf("failed to get page harvest spec: %w", err)
 	}
-	span.SetTag("spec.uri", harvestSpec.QueuedUri.Uri).
-		SetTag("spec.eid", harvestSpec.QueuedUri.ExecutionId).
-		SetTag("spec.seed_uri", harvestSpec.QueuedUri.SeedUri).
-		SetTag("spec.discovery_path", harvestSpec.QueuedUri.DiscoveryPath)
+	span.SetTag("harvest.spec.uri", harvestSpec.QueuedUri.Uri).
+		SetTag("harvest.spec.eid", harvestSpec.QueuedUri.ExecutionId).
+		SetTag("harvest.spec.seed_uri", harvestSpec.QueuedUri.SeedUri).
+		SetTag("harvest.spec.discovery_path", harvestSpec.QueuedUri.DiscoveryPath)
 
 	errc := make(chan error)
 	go func() {
