@@ -27,6 +27,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/robotsevaluator"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/url"
+	"github.com/opentracing/opentracing-go"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -112,9 +113,15 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 		}
 	}()
 
+	var span opentracing.Span
+	defer func() {
+		if span != nil {
+			span.Finish()
+		}
+	}()
 	var sess *session.Session
 	var req *requests.Request
-	ctx, cancel := context.WithTimeout(stream.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for {
 		request, err := Recv(ctx, stream.Recv)
@@ -150,6 +157,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				}); err != nil {
 					return err
 				}
+				span, _ = opentracing.StartSpanFromContext(stream.Context(), "do-direct")
 				continue
 			}
 
@@ -166,7 +174,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				continue
 			} else {
 				cancel()
-				ctx = sess.Context()
+				span, ctx = opentracing.StartSpanFromContext(sess.Context(), "do-session")
 			}
 
 			log.Tracef("Check robots for %v, jeid: %v, ceid: %v, policy: %v",
@@ -288,7 +296,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 			if req == nil {
 				if sess.Id == 0 {
 					if !v.Completed.Cached && v.Completed.CrawlLog != nil && v.Completed.CrawlLog.WarcId != "" {
-						if err := sess.DbAdapter.WriteCrawlLog(context.Background(), v.Completed.CrawlLog); err != nil {
+						if err := sess.DbAdapter.WriteCrawlLog(stream.Context(), v.Completed.CrawlLog); err != nil {
 							log.Errorf("Failed writing crawlLog for direct session: %v", err)
 						}
 					}

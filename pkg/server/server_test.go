@@ -47,7 +47,7 @@ var sessions *session.Registry
 var localhost = GetOutboundIP().String()
 
 func TestMain(m *testing.M) {
-	log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.WarnLevel)
 
 	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
 	pool, err := dockertest.NewPool("")
@@ -151,8 +151,7 @@ func TestSession_Fetch(t *testing.T) {
 		{"maps", &frontierV1.QueuedUri{Uri: "https://goo.gl/maps/EmpIH", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 		{"ranano", &frontierV1.QueuedUri{Uri: "https://ranano.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 		{"cynergi", &frontierV1.QueuedUri{Uri: "https://cynergi.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"pdf1", &frontierV1.QueuedUri{Uri: "https://spaniaposten.no/spaniaposten.no/pdf/2004/54-SpaniaPosten.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"pdf2", &frontierV1.QueuedUri{Uri: "http://publikasjoner.nve.no/rapport/2015/rapport2015_89.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"pdf1", &frontierV1.QueuedUri{Uri: "http://publikasjoner.nve.no/rapport/2015/rapport2015_89.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 	}
 	for _, tt := range tests {
 		ctx := context.Background()
@@ -161,7 +160,7 @@ func TestSession_Fetch(t *testing.T) {
 			if err != nil {
 				t.Error(err)
 			}
-			result, err := s.Fetch(tt.url, conf)
+			result, err := s.Fetch(context.Background(), tt.url, conf)
 			if err != nil {
 				t.Error(err)
 			} else {

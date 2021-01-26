@@ -38,7 +38,7 @@ type RenderResult struct {
 	PageFetchTimeMs int64
 }
 
-type FetchFunc func(*frontierV1.QueuedUri, *configV1.ConfigObject) (*RenderResult, error)
+type FetchFunc func(context.Context, *frontierV1.QueuedUri, *configV1.ConfigObject) (*RenderResult, error)
 
 type Harvester interface {
 	Connect() error
@@ -107,7 +107,7 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 	metrics.ActiveBrowserSessions.Inc()
 	defer metrics.ActiveBrowserSessions.Dec()
 	metrics.PagesTotal.Inc()
-	renderResult, err := fetch(harvestSpec.QueuedUri, harvestSpec.CrawlConfig)
+	renderResult, err := fetch(ctx, harvestSpec.QueuedUri, harvestSpec.CrawlConfig)
 	if err != nil {
 		log.Errorf("Failed to fetch: %v", err)
 		renderResult = &RenderResult{

@@ -213,7 +213,7 @@ func (c *connection) exec(ctx context.Context, q func(ctx context.Context) (*r.C
 
 // wait waits for database to be fully up date and ready for read/write
 func (c *connection) wait() error {
-	ctx, cancel := context.WithTimeout(context.Background(), (1*time.Second)+c.waitTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), (10*time.Second)+c.waitTimeout)
 	defer cancel()
 	runOpts := r.RunOpts{
 		Context: ctx,

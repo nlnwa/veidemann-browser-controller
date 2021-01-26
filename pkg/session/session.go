@@ -166,7 +166,7 @@ func (sess *Session) Context() context.Context {
 	return sess.ctx
 }
 
-func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.ConfigObject) (result *harvester.RenderResult, err error) {
+func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, crawlConf *configV1.ConfigObject) (result *harvester.RenderResult, err error) {
 	// Ensure that bugs in implementation is logged and handled
 	defer func() {
 		if r := recover(); r != nil {
@@ -189,10 +189,12 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		}
 	}()
 
-	span := opentracing.StartSpan("fetch")
+	span, ctx := opentracing.StartSpanFromContext(ctx, "fetch")
 	defer span.Finish()
-	span.LogFields(tracelog.String("uri", QUri.Uri))
-	ctx := opentracing.ContextWithSpan(context.Background(), span)
+	span.LogFields(
+		tracelog.String("uri", QUri.Uri),
+		tracelog.String("eid", QUri.ExecutionId),
+	)
 
 	log.WithField("eid", QUri.ExecutionId).Infof("Start fetch of %v", QUri.Uri)
 	sess.RequestedUrl = QUri
@@ -220,6 +222,7 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 
 	allocatorContext, allocatorCancel := chromedp.NewRemoteAllocator(ctx, sess.browserWsEndpoint)
 	defer allocatorCancel()
+	defer sess.cleanWorkspace()
 
 	// create context
 	cdpCtx, cdpCancel := chromedp.NewContext(allocatorContext)
@@ -418,13 +421,7 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		Error:           sess.Requests.InitialRequest().CrawlLog.Error,
 		PageFetchTimeMs: fetchDuration.Milliseconds(),
 	}
-	span.LogFields(
-		tracelog.Int64("pageFetchTimeMs", result.PageFetchTimeMs),
-		tracelog.Int32("uriCount", result.UriCount),
-		tracelog.Int64("bytesDownloaded", result.BytesDownloaded),
-	)
 
-	sess.cleanWorkspace()
 	log.Debugf("Fetch done: %v", QUri.Uri)
 	return result, nil
 }
