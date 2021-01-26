@@ -26,6 +26,8 @@ import (
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/script"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/url"
+	"github.com/opentracing/opentracing-go"
+	tracelog "github.com/opentracing/opentracing-go/log"
 	log "github.com/sirupsen/logrus"
 	"regexp"
 	"time"
@@ -136,17 +138,22 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 	}
 
 	execute := func(configObject *configV1.ConfigObject, arguments easyjson.RawMessage) (easyjson.RawMessage, error) {
+		span, ctx := opentracing.StartSpanFromContext(ctx, "execute script")
+		defer span.Finish()
 		name := configObject.GetMeta().GetName()
 		id := configObject.GetId()
 		eci, err := resolveExecutionContextId()
 		if err != nil {
+			span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 			return nil, fmt.Errorf("failed to resolve execution context id for script %s (%s): %w", name, id, err)
 		}
-
+		span.SetTag("script.name", name).SetTag("script.id", id).SetTag("script.eci", eci)
 		log.Debugf("Calling script %s (%s) in context %d with arguments %s", name, id, eci, arguments)
 
 		res, err := callScript(ctx, eci, configObject.GetBrowserScript().GetScript(), arguments)
-
+		if err != nil {
+			span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
+		}
 		log.Debugf("Script %s (%s) returned: %s", name, id, res)
 
 		return res, err

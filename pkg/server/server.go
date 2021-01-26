@@ -28,7 +28,6 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/url"
 	"github.com/opentracing/opentracing-go"
-	tracelog "github.com/opentracing/opentracing-go/log"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -113,6 +112,9 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 			err = fetchError
 		}
 	}()
+	streamSpan, _ := opentracing.StartSpanFromContext(stream.Context(), "do")
+	streamSpan.SetTag("component", "server")
+	defer streamSpan.Finish()
 
 	var span opentracing.Span
 	defer func() {
@@ -175,7 +177,11 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				continue
 			} else {
 				cancel()
-				span, ctx = opentracing.StartSpanFromContext(sess.Context(), "do-session")
+				span, ctx = opentracing.StartSpanFromContext(sess.Context(), "do-session",
+					opentracing.Tag{Key: "http.method", Value: v.New.GetMethod()},
+					opentracing.Tag{Key: "http.url", Value: v.New.Uri},
+					opentracing.Tag{Key: "proxy.id", Value: v.New.ProxyId},
+				)
 			}
 
 			log.Tracef("Check robots for %v, jeid: %v, ceid: %v, policy: %v",
@@ -275,7 +281,6 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 			if replacementScript != nil {
 				reply.ReplacementScript = replacementScript
 			}
-			span.LogFields(tracelog.String("uri", v.New.Uri))
 			if err := Send(stream.Send, &browsercontrollerV1.DoReply{Action: &browsercontrollerV1.DoReply_New{New: reply}}); err != nil {
 				return err
 			}

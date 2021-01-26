@@ -25,6 +25,8 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/errors"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/metrics"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
+	"github.com/opentracing/opentracing-go"
+	tracelog "github.com/opentracing/opentracing-go/log"
 	log "github.com/sirupsen/logrus"
 	"io"
 	"strconv"
@@ -69,6 +71,10 @@ func (h *harvester) Close() {
 }
 
 func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
+	span := opentracing.StartSpan("harvest").SetTag("component", "harvester")
+	defer span.Finish()
+	ctx = opentracing.ContextWithSpan(ctx, span)
+
 	harvestCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -84,8 +90,13 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 	var harvestSpec *frontierV1.PageHarvestSpec
 	harvestSpec, err = stream.Recv()
 	if err != nil {
+		span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 		return fmt.Errorf("failed to get page harvest spec: %w", err)
 	}
+	span.SetTag("spec.uri", harvestSpec.QueuedUri.Uri).
+		SetTag("spec.eid", harvestSpec.QueuedUri.ExecutionId).
+		SetTag("spec.seed_uri", harvestSpec.QueuedUri.SeedUri).
+		SetTag("spec.discovery_path", harvestSpec.QueuedUri.DiscoveryPath)
 
 	errc := make(chan error)
 	go func() {
@@ -97,18 +108,19 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 				return
 			}
 			if err != nil {
+				span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 				errc <- err
 				return
 			}
 		}
 	}()
-
 	log.WithField("uri", harvestSpec.QueuedUri.Uri).Tracef("Starting fetch")
 	metrics.ActiveBrowserSessions.Inc()
 	defer metrics.ActiveBrowserSessions.Dec()
 	metrics.PagesTotal.Inc()
 	renderResult, err := fetch(ctx, harvestSpec.QueuedUri, harvestSpec.CrawlConfig)
 	if err != nil {
+		span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 		log.Errorf("Failed to fetch: %v", err)
 		renderResult = &RenderResult{
 			Error: errors.CommonsError(err),
@@ -150,6 +162,11 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 			}
 		}
 	}
+
+	span.SetTag("harvest.page_fetch_time_ms", renderResult.PageFetchTimeMs)
+	span.SetTag("harvest.uri_count", renderResult.UriCount)
+	span.SetTag("harvest.bytes_downloaded", renderResult.BytesDownloaded)
+	span.SetTag("harvest.outlinks", len(renderResult.Outlinks))
 
 	if err := stream.CloseSend(); err != nil {
 		return fmt.Errorf("failed to close send: %w", err)

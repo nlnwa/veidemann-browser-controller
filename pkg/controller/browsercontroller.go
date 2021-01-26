@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/server"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
-	"github.com/opentracing/opentracing-go"
 	log "github.com/sirupsen/logrus"
 	"time"
 )
@@ -80,9 +79,6 @@ func (bc *BrowserController) Run() error {
 				return fmt.Errorf("failed to get session: %w", err)
 			}
 			go func() {
-				span := opentracing.StartSpan("harvest")
-				defer span.Finish()
-				ctx := opentracing.ContextWithSpan(context.Background(), span)
 				err := bc.opts.harvester.Harvest(ctx, sess.Fetch)
 				if err != nil {
 					if err == context.Canceled {

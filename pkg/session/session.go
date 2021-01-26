@@ -42,7 +42,6 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/syncx"
 	"github.com/nlnwa/whatwg-url/url"
 	"github.com/opentracing/opentracing-go"
-	tracelog "github.com/opentracing/opentracing-go/log"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -189,12 +188,9 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 		}
 	}()
 
-	span, ctx := opentracing.StartSpanFromContext(ctx, "fetch")
+	span, ctx := opentracing.StartSpanFromContext(ctx, "session",
+		opentracing.Tag{Key: "session.id", Value: sess.Id})
 	defer span.Finish()
-	span.LogFields(
-		tracelog.String("uri", QUri.Uri),
-		tracelog.String("eid", QUri.ExecutionId),
-	)
 
 	log.WithField("eid", QUri.ExecutionId).Infof("Start fetch of %v", QUri.Uri)
 	sess.RequestedUrl = QUri
@@ -239,6 +235,7 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 	); err != nil {
 		return nil, err
 	}
+	span.SetTag("fetch.user_agent", userAgent)
 
 	var loadCtx context.Context
 	loadCtx, sess.loadCancel = context.WithTimeout(sess.ctx, maxTotalTime)
@@ -494,6 +491,8 @@ func (sess *Session) extractCookies() []*frontierV1.Cookie {
 }
 
 func (sess *Session) saveScreenshot() {
+	span, ctx := opentracing.StartSpanFromContext(sess.ctx, "save screenshot")
+	defer span.Finish()
 	// Skip screenshot of pages loaded from cache
 	if sess.Requests.RootRequest().FromCache {
 		log.Debugf("Page with resource type %v is from cache, skipping screenshot", sess.Requests.RootRequest().ResourceType)
@@ -513,7 +512,7 @@ func (sess *Session) saveScreenshot() {
 	}
 
 	var data []byte
-	err := chromedp.Run(sess.ctx,
+	err := chromedp.Run(ctx,
 		chromedp.ActionFunc(func(ctx context.Context) (err error) {
 			data, err = page.CaptureScreenshot().WithFormat(page.CaptureScreenshotFormatPng).Do(ctx)
 			return
@@ -529,7 +528,7 @@ func (sess *Session) saveScreenshot() {
 		BrowserConfig:  sess.browserConfig,
 		BrowserVersion: sess.BrowserVersion,
 	}
-	if err = sess.screenShotWriter.Write(sess.ctx, data, metadata); err != nil {
+	if err = sess.screenShotWriter.Write(ctx, data, metadata); err != nil {
 		log.Errorf("Error writing screenshot: %v", err)
 		return
 	}
