@@ -22,11 +22,12 @@ import (
 	"fmt"
 	browsercontrollerV1 "github.com/nlnwa/veidemann-api/go/browsercontroller/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/errors"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/requests"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/robotsevaluator"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/url"
+	"github.com/opentracing/opentracing-go"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -112,9 +113,15 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 		}
 	}()
 
+	var span opentracing.Span
+	defer func() {
+		if span != nil {
+			span.Finish()
+		}
+	}()
 	var sess *session.Session
 	var req *requests.Request
-	ctx, cancel := context.WithTimeout(stream.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for {
 		request, err := Recv(ctx, stream.Recv)
@@ -150,6 +157,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				}); err != nil {
 					return err
 				}
+				span, _ = opentracing.StartSpanFromContext(stream.Context(), "do-direct")
 				continue
 			}
 
@@ -166,7 +174,11 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				continue
 			} else {
 				cancel()
-				ctx = sess.Context()
+				span, ctx = opentracing.StartSpanFromContext(sess.Context(), "do-session",
+					opentracing.Tag{Key: "http.method", Value: v.New.GetMethod()},
+					opentracing.Tag{Key: "http.url", Value: v.New.Uri},
+					opentracing.Tag{Key: "proxy.id", Value: v.New.ProxyId},
+				)
 			}
 
 			log.Tracef("Check robots for %v, jeid: %v, ceid: %v, policy: %v",
@@ -223,7 +235,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 					}
 					continue
 				case "OPTIONS":
-					Url := database.NormalizeUrl(v.New.Uri)
+					Url := url.Normalize(v.New.Uri)
 					req = sess.Requests.GetByUrl(Url, true)
 					if req == nil {
 						log.Debugf("No new request found for %v %v %v. Has fulfilled request: %v", v.New.RequestId, v.New.Method, Url, sess.Requests.GetByUrl(Url, false) != nil)
@@ -262,11 +274,10 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				JobExecutionId:   sess.RequestedUrl.JobExecutionId,
 				CollectionRef:    sess.CrawlConfig.CollectionRef,
 			}
-			replacementScript := sess.DbAdapter.GetReplacementScript(sess.BrowserConfig, v.New.Uri)
+			replacementScript := sess.GetReplacementScript(v.New.Uri)
 			if replacementScript != nil {
 				reply.ReplacementScript = replacementScript
 			}
-
 			if err := Send(stream.Send, &browsercontrollerV1.DoReply{Action: &browsercontrollerV1.DoReply_New{New: reply}}); err != nil {
 				return err
 			}
@@ -288,7 +299,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 			if req == nil {
 				if sess.Id == 0 {
 					if !v.Completed.Cached && v.Completed.CrawlLog != nil && v.Completed.CrawlLog.WarcId != "" {
-						if err := sess.DbAdapter.WriteCrawlLog(v.Completed.CrawlLog); err != nil {
+						if err := sess.DbAdapter.WriteCrawlLog(stream.Context(), v.Completed.CrawlLog); err != nil {
 							log.Errorf("Failed writing crawlLog for direct session: %v", err)
 						}
 					}

@@ -24,49 +24,97 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/mailru/easyjson"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/script"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/url"
+	"github.com/opentracing/opentracing-go"
+	tracelog "github.com/opentracing/opentracing-go/log"
 	log "github.com/sirupsen/logrus"
 	"regexp"
 	"time"
 )
 
-// executeScripts executes scripts of type scriptType.
-func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.BrowserScript_BrowserScriptType) error {
-	// map of all scripts keyed on id
-	scripts := make(map[string]*configV1.ConfigObject)
+type sessionScripts struct {
+	scripts   map[configV1.BrowserScript_BrowserScriptType][]*configV1.ConfigObject
+	blacklist []configV1.BrowserScript_BrowserScriptType
+}
 
-	// array of id's for scripts of given type
-	var scriptIds []string
+func newSessionScripts() *sessionScripts {
+	return &sessionScripts{
+		scripts: make(map[configV1.BrowserScript_BrowserScriptType][]*configV1.ConfigObject),
+		blacklist: []configV1.BrowserScript_BrowserScriptType{
+			configV1.BrowserScript_SCOPE_CHECK,
+		},
+	}
+}
 
-	// add all scripts of given type to scripts map and also add id to an array
-	for _, configObject := range sess.DbAdapter.GetScripts(sess.BrowserConfig, scriptType) {
-		if !match(configObject.GetBrowserScript().GetUrlRegexp(), sess.RequestedUrl.Uri) {
+func (s *sessionScripts) IsBlacklisted(scriptType configV1.BrowserScript_BrowserScriptType) bool {
+	for _, b := range s.blacklist {
+		if scriptType == b {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *sessionScripts) Get(scriptType configV1.BrowserScript_BrowserScriptType) []*configV1.ConfigObject {
+	return s.scripts[scriptType]
+}
+
+func (sess *Session) loadScripts(ctx context.Context) (*sessionScripts, error) {
+	bs := newSessionScripts()
+
+	scripts, err := sess.DbAdapter.GetScripts(ctx, sess.browserConfig)
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range scripts {
+		scriptType := s.GetBrowserScript().GetBrowserScriptType()
+		if bs.IsBlacklisted(scriptType) {
 			continue
 		}
-		scripts[configObject.Id] = configObject
-		scriptIds = append(scriptIds, configObject.Id)
+		urlRegex := s.GetBrowserScript().GetUrlRegexp()
+		if !match(urlRegex, sess.RequestedUrl.Uri) {
+			continue
+		}
+		bs.scripts[scriptType] = append(bs.scripts[scriptType], s)
 	}
-	if len(scriptIds) == 0 {
+	return bs, nil
+}
+
+func (sess *Session) GetReplacementScript(uri string) *configV1.BrowserScript {
+	replacements := sess.scripts.Get(configV1.BrowserScript_REPLACEMENT)
+	if len(replacements) == 0 {
 		return nil
 	}
-	seed := sess.DbAdapter.GetSeedByUri(sess.RequestedUrl)
-
-	// add all potential next scripts to scripts map
-	for _, configObject := range sess.DbAdapter.GetScripts(sess.BrowserConfig, configV1.BrowserScript_UNDEFINED) {
-		if !match(configObject.GetBrowserScript().GetUrlRegexp(), sess.RequestedUrl.Uri) {
-			continue
+	normalizedUri := url.Normalize(uri)
+	longestMatch := 0
+	var currentBestMatch *configV1.BrowserScript
+	for _, bc := range replacements {
+		for _, urlRegexp := range bc.GetBrowserScript().UrlRegexp {
+			if re, err := regexp.Compile(urlRegexp); err == nil {
+				re.Longest()
+				l := len(re.FindString(normalizedUri))
+				if l > 0 && l > longestMatch {
+					longestMatch = l
+					currentBestMatch = bc.GetBrowserScript()
+				}
+			} else {
+				log.Warnf("Could not match url for replacement script %v", err)
+			}
 		}
-		scripts[configObject.Id] = configObject
 	}
+	return currentBestMatch
+}
 
+// executeScripts executes scripts of type scriptType.
+func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.BrowserScript_BrowserScriptType) error {
 	// wait is executed depending on value returned from script (WaitForData)
 	wait := func() {
 		waitStart := time.Now()
 		_ = sess.netActivityTimer.WaitForCompletion()
-		log.Debugf("Waited %v for network activity to settle", time.Since(waitStart))
+		log.Tracef("Waited %v for network activity to settle", time.Since(waitStart))
 		notifyCount := sess.netActivityTimer.Reset()
-		log.Debugf("Got %d notifications while waiting for network activity to settle", notifyCount)
+		log.Tracef("Got %d notifications while waiting for network activity to settle", notifyCount)
 	}
 
 	var resolveExecutionContextId func() (runtime.ExecutionContextID, error)
@@ -89,27 +137,37 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 		return fmt.Errorf("script execution for type %v is not implemented", scriptType)
 	}
 
-	execute := func(ctx context.Context, configObject *configV1.ConfigObject, arguments easyjson.RawMessage) (easyjson.RawMessage, error) {
+	execute := func(configObject *configV1.ConfigObject, arguments easyjson.RawMessage) (easyjson.RawMessage, error) {
+		span, ctx := opentracing.StartSpanFromContext(ctx, "execute script")
+		defer span.Finish()
 		name := configObject.GetMeta().GetName()
 		id := configObject.GetId()
 		eci, err := resolveExecutionContextId()
 		if err != nil {
+			span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 			return nil, fmt.Errorf("failed to resolve execution context id for script %s (%s): %w", name, id, err)
 		}
-
+		span.SetTag("script.name", name).SetTag("script.id", id).SetTag("script.eci", eci)
 		log.Debugf("Calling script %s (%s) in context %d with arguments %s", name, id, eci, arguments)
 
 		res, err := callScript(ctx, eci, configObject.GetBrowserScript().GetScript(), arguments)
-
+		if err != nil {
+			span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
+		}
 		log.Debugf("Script %s (%s) returned: %s", name, id, res)
 
 		return res, err
 	}
-
-	for _, scriptId := range scriptIds {
-		err := script.Run(ctx, scriptId, seed, scripts, execute, wait)
+	scripts := make(map[string]*configV1.ConfigObject)
+	for _, s := range sess.scripts.Get(configV1.BrowserScript_UNDEFINED) {
+		scripts[s.Id] = s
+	}
+	for _, s := range sess.scripts.Get(scriptType) {
+		// add initial script to map
+		scripts[s.Id] = s
+		err := script.Run(s.Id, scripts, sess.RequestedUrl.Annotation, execute, wait)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to run script %s (%s): %w", s.Meta.Name, s.Id, err)
 		}
 	}
 	return nil
@@ -188,7 +246,7 @@ func match(regExps []string, uri string) bool {
 	if len(regExps) == 0 {
 		return true
 	}
-	normalizedUri := database.NormalizeUrl(uri)
+	normalizedUri := url.Normalize(uri)
 	match := false
 	for _, urlRegexp := range regExps {
 		re, err := regexp.Compile(urlRegexp)

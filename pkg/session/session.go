@@ -41,6 +41,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/syncx"
 	"github.com/nlnwa/whatwg-url/url"
+	"github.com/opentracing/opentracing-go"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -72,11 +73,11 @@ type Session struct {
 	timer             *syncx.CompletionTimer
 	RequestedUrl      *frontierV1.QueuedUri
 	CrawlConfig       *configV1.CrawlConfig
-	BrowserConfig     *configV1.BrowserConfig
+	browserConfig     *configV1.BrowserConfig
 	PolitenessConfig  *configV1.ConfigObject
 	DbAdapter         *database.DbAdapter
 	screenShotWriter  screenshotwriter.ScreenshotWriter
-	WriteScreenshot   func(ctx context.Context, sess *Session, data []byte) error
+	scripts           *sessionScripts
 }
 
 func newDefaultSession(opts ...Option) *Session {
@@ -164,7 +165,7 @@ func (sess *Session) Context() context.Context {
 	return sess.ctx
 }
 
-func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.ConfigObject) (result *harvester.RenderResult, err error) {
+func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, crawlConf *configV1.ConfigObject) (result *harvester.RenderResult, err error) {
 	// Ensure that bugs in implementation is logged and handled
 	defer func() {
 		if r := recover(); r != nil {
@@ -187,35 +188,46 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		}
 	}()
 
+	span, ctx := opentracing.StartSpanFromContext(ctx, "session",
+		opentracing.Tag{Key: "session.id", Value: sess.Id})
+	defer span.Finish()
+
 	log.WithField("eid", QUri.ExecutionId).Infof("Start fetch of %v", QUri.Uri)
 	sess.RequestedUrl = QUri
 	sess.CrawlConfig = crawlConf.GetCrawlConfig()
 
-	bConf, err := sess.DbAdapter.GetConfigObject(sess.CrawlConfig.BrowserConfigRef)
+	bConf, err := sess.DbAdapter.GetConfigObject(ctx, sess.CrawlConfig.BrowserConfigRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get browser config: %v", err)
 	}
-	sess.BrowserConfig = bConf.GetBrowserConfig()
+	sess.browserConfig = bConf.GetBrowserConfig()
 
-	sess.PolitenessConfig, err = sess.DbAdapter.GetConfigObject(sess.CrawlConfig.PolitenessRef)
+	sess.PolitenessConfig, err = sess.DbAdapter.GetConfigObject(ctx, sess.CrawlConfig.PolitenessRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get politeness config: %v", err)
 	}
 
-	maxTotalTime := time.Duration(sess.BrowserConfig.PageLoadTimeoutMs) * time.Millisecond
-	maxIdleTime := time.Duration(sess.BrowserConfig.MaxInactivityTimeMs) * time.Millisecond
+	maxTotalTime := time.Duration(sess.browserConfig.PageLoadTimeoutMs) * time.Millisecond
+	maxIdleTime := time.Duration(sess.browserConfig.MaxInactivityTimeMs) * time.Millisecond
 
-	allocatorContext, allocatorCancel := chromedp.NewRemoteAllocator(context.Background(), sess.browserWsEndpoint)
+	if scripts, err := sess.loadScripts(ctx); err != nil {
+		return nil, fmt.Errorf("failed to load scripts: %w", err)
+	} else {
+		sess.scripts = scripts
+	}
+
+	allocatorContext, allocatorCancel := chromedp.NewRemoteAllocator(ctx, sess.browserWsEndpoint)
 	defer allocatorCancel()
+	defer sess.cleanWorkspace()
 
 	// create context
-	ctx, cancel := chromedp.NewContext(allocatorContext)
-	defer cancel()
-	sess.ctx = ctx
+	cdpCtx, cdpCancel := chromedp.NewContext(allocatorContext)
+	defer cdpCancel()
+	sess.ctx = cdpCtx
 
 	// ensure the first tab is created
 	var userAgent string
-	if err := chromedp.Run(ctx,
+	if err := chromedp.Run(sess.ctx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_, sess.BrowserVersion, _, userAgent, _, err = browser.GetVersion().Do(ctx)
 			return err
@@ -223,6 +235,7 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	); err != nil {
 		return nil, err
 	}
+	span.SetTag("fetch.user_agent", userAgent)
 
 	var loadCtx context.Context
 	loadCtx, sess.loadCancel = context.WithTimeout(sess.ctx, maxTotalTime)
@@ -231,12 +244,12 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	sess.frameWg = syncx.NewWaitGroup(loadCtx)
 	sess.Requests = requests.NewRegistry(sess.frameWg)
 
-	sess.initListeners(ctx)
+	sess.initListeners(cdpCtx)
 
 	sess.netActivityTimer = syncx.NewCompletionTimer(1*time.Second, maxTotalTime, nil)
 	sess.timer = syncx.NewCompletionTimer(maxIdleTime, maxTotalTime, sess.Requests.MatchCrawlLogs)
 
-	sess.UserAgent = sess.BrowserConfig.UserAgent
+	sess.UserAgent = sess.browserConfig.UserAgent
 	if sess.UserAgent == "" {
 		sess.UserAgent = strings.ReplaceAll(userAgent, "HeadlessChrome", "Chrome")
 	}
@@ -244,8 +257,8 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	deviceInfo := &device.Info{
 		Name:      "Desktop",
 		UserAgent: sess.UserAgent,
-		Width:     int64(sess.BrowserConfig.WindowWidth),
-		Height:    int64(sess.BrowserConfig.WindowHeight),
+		Width:     int64(sess.browserConfig.WindowWidth),
+		Height:    int64(sess.browserConfig.WindowHeight),
 		Scale:     1,
 		Landscape: false,
 		Mobile:    false,
@@ -253,7 +266,7 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 	}
 
 	// run task list
-	if err := chromedp.Run(ctx,
+	if err := chromedp.Run(sess.ctx,
 		security.SetIgnoreCertificateErrors(true),
 		network.SetCacheDisabled(true),
 		serviceworker.Enable(),
@@ -316,16 +329,26 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 
 	sess.Requests.FinalizeResponses(sess.RequestedUrl)
 
+	if sess.CrawlConfig.Extra.CreateScreenshot {
+		sess.saveScreenshot()
+	}
+	outlinks := sess.extractOutlinks()
+	log.Debugf("Found %d outlinks.", len(outlinks))
+	cookies := sess.extractCookies()
+
+	err = chromedp.Cancel(cdpCtx)
+	if err != nil {
+		log.Warnf("Failed closing browser: %v", err)
+	}
+
 	var crawlLogCount int32
 	var bytesDownloaded int64
 	var resources []*frontierV1.PageLog_Resource
+	var crawlLogs []*frontierV1.CrawlLog
 
 	sess.Requests.Walk(func(r *requests.Request) {
 		if r.CrawlLog != nil && r.CrawlLog.WarcId != "" {
-			if err := sess.DbAdapter.WriteCrawlLog(r.CrawlLog); err != nil {
-				log.Errorf("Error writing crawlLog: %v", err)
-				return
-			}
+			crawlLogs = append(crawlLogs, r.CrawlLog)
 			crawlLogCount++
 			bytesDownloaded += r.CrawlLog.Size
 		} else {
@@ -351,20 +374,8 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 			log.Warnf("No crawllog for resource. Skipping %v %v %v. Got new: %v, Got complete %v", r.RequestId, r.Method, r.Url, r.GotNew, r.GotComplete)
 		}
 	})
-
-	if sess.CrawlConfig.Extra.CreateScreenshot {
-		sess.saveScreenshot()
-	}
-
-	qUris := sess.extractOutlinks()
-	outlinks := make([]string, len(qUris))
-	for i, qUri := range qUris {
-		outlinks[i] = qUri.Uri
-	}
-
-	err = chromedp.Cancel(ctx)
-	if err != nil {
-		log.Warnf("Failed closing browser: %v", err)
+	if err := sess.DbAdapter.WriteCrawlLogs(ctx, crawlLogs); err != nil {
+		log.Errorf("Error writing crawlLogs: %v", err)
 	}
 
 	if sess.Requests.InitialRequest() != nil && sess.Requests.InitialRequest().CrawlLog != nil {
@@ -379,7 +390,7 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 			Resource:            resources,
 			Outlink:             outlinks,
 		}
-		if err := sess.DbAdapter.WritePageLog(pageLog); err != nil {
+		if err := sess.DbAdapter.WritePageLog(ctx, pageLog); err != nil {
 			return nil, fmt.Errorf("error writing pageLog: %w", err)
 		} else {
 			log.WithField("uri", sess.RequestedUrl.Uri).Debugf("Pagelog written")
@@ -388,6 +399,18 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		return nil, fmt.Errorf("missing initial request: %w", err)
 	}
 
+	qUris := make([]*frontierV1.QueuedUri, len(outlinks))
+	for i, uri := range outlinks {
+		qUris[i] = &frontierV1.QueuedUri{
+			ExecutionId:         sess.RequestedUrl.ExecutionId,
+			DiscoveredTimeStamp: ptypes.TimestampNow(),
+			Uri:                 uri,
+			DiscoveryPath:       sess.Requests.RootRequest().CrawlLog.DiscoveryPath + "L",
+			Referrer:            sess.Requests.RootRequest().Url,
+			Cookies:             cookies,
+			JobExecutionId:      sess.RequestedUrl.JobExecutionId,
+		}
+	}
 	result = &harvester.RenderResult{
 		BytesDownloaded: bytesDownloaded,
 		UriCount:        crawlLogCount,
@@ -396,7 +419,6 @@ func (sess *Session) Fetch(QUri *frontierV1.QueuedUri, crawlConf *configV1.Confi
 		PageFetchTimeMs: fetchDuration.Milliseconds(),
 	}
 
-	sess.cleanWorkspace()
 	log.Debugf("Fetch done: %v", QUri.Uri)
 	return result, nil
 }
@@ -469,6 +491,8 @@ func (sess *Session) extractCookies() []*frontierV1.Cookie {
 }
 
 func (sess *Session) saveScreenshot() {
+	span, ctx := opentracing.StartSpanFromContext(sess.ctx, "save screenshot")
+	defer span.Finish()
 	// Skip screenshot of pages loaded from cache
 	if sess.Requests.RootRequest().FromCache {
 		log.Debugf("Page with resource type %v is from cache, skipping screenshot", sess.Requests.RootRequest().ResourceType)
@@ -488,7 +512,7 @@ func (sess *Session) saveScreenshot() {
 	}
 
 	var data []byte
-	err := chromedp.Run(sess.ctx,
+	err := chromedp.Run(ctx,
 		chromedp.ActionFunc(func(ctx context.Context) (err error) {
 			data, err = page.CaptureScreenshot().WithFormat(page.CaptureScreenshotFormatPng).Do(ctx)
 			return
@@ -501,19 +525,19 @@ func (sess *Session) saveScreenshot() {
 	metadata := screenshotwriter.Metadata{
 		CrawlConfig:    sess.CrawlConfig,
 		CrawlLog:       sess.Requests.RootRequest().CrawlLog,
-		BrowserConfig:  sess.BrowserConfig,
+		BrowserConfig:  sess.browserConfig,
 		BrowserVersion: sess.BrowserVersion,
 	}
-	if err = sess.screenShotWriter.Write(sess.ctx, data, metadata); err != nil {
+	if err = sess.screenShotWriter.Write(ctx, data, metadata); err != nil {
 		log.Errorf("Error writing screenshot: %v", err)
 		return
 	}
 }
 
-func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
-	cookies := sess.extractCookies()
+func (sess *Session) extractOutlinks() []string {
 	var extractedUrls []string
-	for _, s := range sess.DbAdapter.GetScripts(sess.BrowserConfig, configV1.BrowserScript_EXTRACT_OUTLINKS) {
+
+	for _, s := range sess.scripts.Get(configV1.BrowserScript_EXTRACT_OUTLINKS) {
 		var res *runtime.RemoteObject
 		var exceptionDetails *runtime.ExceptionDetails
 		err := chromedp.Run(sess.ctx,
@@ -539,8 +563,6 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 				continue
 			}
 
-			log.Debugf("Found %d outlinks.", len(links))
-
 			for _, link := range links {
 				link = strings.TrimSpace(link)
 				link = strings.Trim(link, "\"\\")
@@ -551,21 +573,7 @@ func (sess *Session) extractOutlinks() []*frontierV1.QueuedUri {
 		}
 	}
 
-	qUris := make([]*frontierV1.QueuedUri, len(extractedUrls))
-
-	for i, uri := range extractedUrls {
-		qUris[i] = &frontierV1.QueuedUri{
-			ExecutionId:         sess.RequestedUrl.ExecutionId,
-			DiscoveredTimeStamp: ptypes.TimestampNow(),
-			Uri:                 uri,
-			DiscoveryPath:       sess.Requests.RootRequest().CrawlLog.DiscoveryPath + "L",
-			Referrer:            sess.Requests.RootRequest().Url,
-			Cookies:             cookies,
-			JobExecutionId:      sess.RequestedUrl.JobExecutionId,
-		}
-	}
-
-	return qUris
+	return extractedUrls
 }
 
 func (sess *Session) AbortFetch() {
