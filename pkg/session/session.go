@@ -391,7 +391,7 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 			Outlink:             outlinks,
 		}
 		if err := sess.DbAdapter.WritePageLog(ctx, pageLog); err != nil {
-			return nil, fmt.Errorf("error writing pageLog: %w", err)
+			log.Errorf("Error writing pageLog: %v", err)
 		} else {
 			log.WithField("uri", sess.RequestedUrl.Uri).Debugf("Pagelog written")
 		}
