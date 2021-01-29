@@ -30,6 +30,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"io"
 	"strconv"
+	"sync"
 )
 
 type RenderResult struct {
@@ -73,9 +74,9 @@ func (h *harvester) Close() {
 func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 	span := opentracing.StartSpan("harvest").SetTag("component", "harvester")
 	defer span.Finish()
-	ctx = opentracing.ContextWithSpan(ctx, span)
+	spanCtx := opentracing.ContextWithSpan(context.Background(), span)
 
-	harvestCtx, cancel := context.WithCancel(ctx)
+	harvestCtx, cancel := context.WithCancel(spanCtx)
 	defer cancel()
 
 	stream, err := h.client.GetNextPage(harvestCtx)
@@ -83,37 +84,51 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 		return fmt.Errorf("failed to get the frontier GetNextPage client: %w", err)
 	}
 
-	err = stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_RequestNextPage{RequestNextPage: true}})
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to send request for new page to frontier: %w", err)
-	}
-	var harvestSpec *frontierV1.PageHarvestSpec
-	harvestSpec, err = stream.Recv()
-	if err != nil {
-		span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
-		return fmt.Errorf("failed to get page harvest spec: %w", err)
-	}
-	span.SetTag("harvest.spec.uri", harvestSpec.QueuedUri.Uri).
-		SetTag("harvest.spec.eid", harvestSpec.QueuedUri.ExecutionId).
-		SetTag("harvest.spec.seed_uri", harvestSpec.QueuedUri.SeedUri).
-		SetTag("harvest.spec.discovery_path", harvestSpec.QueuedUri.DiscoveryPath)
-
 	errc := make(chan error)
+	waitn := make(chan struct{}) // Closed when initial response from Frontier is received
+	var harvestSpec *frontierV1.PageHarvestSpec
 	go func() {
+		once := new(sync.Once)
 		for {
-			_, err := stream.Recv()
+			var err error
+			harvestSpec, err = stream.Recv()
 			if err == io.EOF {
 				// stream completed
 				close(errc)
 				return
 			}
 			if err != nil {
-				span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 				errc <- err
 				return
 			}
+			once.Do(func() {
+				close(waitn)
+			})
 		}
 	}()
+
+	err = stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_RequestNextPage{RequestNextPage: true}})
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to send request for new page to frontier: %w", err)
+	}
+
+	select {
+	case <-ctx.Done():
+		// ctx cancelled while requesting next page
+		return ctx.Err()
+	case err := <-errc:
+		err = fmt.Errorf("failed to get page harvest spec: %w", err)
+		span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
+		return err
+	case <-waitn:
+		// initial request received
+	}
+
+	span.SetTag("harvest.spec.uri", harvestSpec.QueuedUri.Uri).
+		SetTag("harvest.spec.eid", harvestSpec.QueuedUri.ExecutionId).
+		SetTag("harvest.spec.seed_uri", harvestSpec.QueuedUri.SeedUri).
+		SetTag("harvest.spec.discovery_path", harvestSpec.QueuedUri.DiscoveryPath)
+
 	log.WithField("uri", harvestSpec.QueuedUri.Uri).Tracef("Starting fetch")
 	metrics.ActiveBrowserSessions.Inc()
 	defer metrics.ActiveBrowserSessions.Dec()
