@@ -157,7 +157,10 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				}); err != nil {
 					return err
 				}
-				span, _ = opentracing.StartSpanFromContext(stream.Context(), "do-direct")
+				span, _ = opentracing.StartSpanFromContext(stream.Context(), "new direct request",
+					opentracing.Tag{Key: "http.method", Value: v.New.GetMethod()},
+					opentracing.Tag{Key: "http.url", Value: v.New.Uri},
+				)
 				continue
 			}
 
@@ -174,7 +177,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				continue
 			} else {
 				cancel()
-				span, ctx = opentracing.StartSpanFromContext(sess.Context(), "do-session",
+				span, ctx = opentracing.StartSpanFromContext(sess.Context(), "new request",
 					opentracing.Tag{Key: "http.method", Value: v.New.GetMethod()},
 					opentracing.Tag{Key: "http.url", Value: v.New.Uri},
 					opentracing.Tag{Key: "proxy.id", Value: v.New.ProxyId},
