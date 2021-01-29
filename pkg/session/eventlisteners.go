@@ -44,7 +44,7 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 				req.Initiator = ev.Initiator.Type.String()
 			}
 		case *network.EventLoadingFailed:
-			log.Tracef("Loading failed: %v, %v, Reason; %v, Cancel: %v, %v, %v", ev.RequestID, ev.Type, ev.BlockedReason, ev.Canceled, ev.ErrorText, ev.Timestamp.Time())
+			log.Debugf("Loading failed: %v, %v, Reason; %v, Cancel: %v, %v, %v", ev.RequestID, ev.Type, ev.BlockedReason, ev.Canceled, ev.ErrorText, ev.Timestamp.Time())
 		case *page.EventFrameStartedLoading:
 			log.Tracef("Frame started loading: %v", ev.FrameID)
 			sess.Requests.NotifyLoadStart()
