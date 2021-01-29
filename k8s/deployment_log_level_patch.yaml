@@ -9,7 +9,11 @@ spec:
         - name: veidemann-browser-controller
           env:
             - name: LOG_LEVEL
-              value: DEBUG
+              value: "DEBUG"
+        - name: veidemann-harvester-proxy
+          env:
+            - name: LOG_LEVEL
+              value: "WARN"
         - name: veidemann-harvester-browser
           env:
             - name: DEBUG

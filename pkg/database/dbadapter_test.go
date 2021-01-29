@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	"github.com/nlnwa/veidemann-api/go/frontier/v1"
 	"reflect"
@@ -18,7 +19,7 @@ type dbConnMock struct {
 	i int
 }
 
-func (d *dbConnMock) GetConfig(ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
+func (d *dbConnMock) GetConfig(_ context.Context, _ *configV1.ConfigRef) (*configV1.ConfigObject, error) {
 	d.i++
 	switch d.i {
 	case 1:
@@ -38,19 +39,19 @@ func (d *dbConnMock) Close() error {
 	panic("implement me")
 }
 
-func (d *dbConnMock) GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
+func (d *dbConnMock) GetConfigsForSelector(_ context.Context, _ configV1.Kind, _ *configV1.Label) ([]*configV1.ConfigObject, error) {
 	panic("implement me")
 }
 
-func (d *dbConnMock) GetSeedByUri(qUri *frontier.QueuedUri) (*configV1.ConfigObject, error) {
+func (d *dbConnMock) WriteCrawlLog(_ context.Context, _ *frontier.CrawlLog) error {
 	panic("implement me")
 }
 
-func (d *dbConnMock) WriteCrawlLog(crawlLog *frontier.CrawlLog) error {
+func (d *dbConnMock) WriteCrawlLogs(_ context.Context, _ []*frontier.CrawlLog) error {
 	panic("implement me")
 }
 
-func (d *dbConnMock) WritePageLog(pageLog *frontier.PageLog) error {
+func (d *dbConnMock) WritePageLog(_ context.Context, _ *frontier.PageLog) error {
 	panic("implement me")
 }
 
@@ -71,7 +72,7 @@ func Test_configCache_Get(t *testing.T) {
 			cc := NewDbAdapter(&dbConnMock{i: 0}, 100*time.Millisecond)
 			ref := &configV1.ConfigRef{Kind: configV1.Kind_crawlJob, Id: "1"}
 
-			gotFirst, err := cc.GetConfigObject(ref)
+			gotFirst, err := cc.GetConfigObject(context.Background(), ref)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("1 GetConfigObject() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -82,7 +83,7 @@ func Test_configCache_Get(t *testing.T) {
 
 			time.Sleep(tt.sleep)
 
-			gotSecond, err := cc.GetConfigObject(ref)
+			gotSecond, err := cc.GetConfigObject(context.Background(), ref)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("2 GetConfigObject() error = %v, wantErr %v", err, tt.wantErr)
 				return

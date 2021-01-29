@@ -47,7 +47,7 @@ var sessions *session.Registry
 var localhost = GetOutboundIP().String()
 
 func TestMain(m *testing.M) {
-	log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.WarnLevel)
 
 	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
 	pool, err := dockertest.NewPool("")
@@ -151,8 +151,7 @@ func TestSession_Fetch(t *testing.T) {
 		{"maps", &frontierV1.QueuedUri{Uri: "https://goo.gl/maps/EmpIH", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 		{"ranano", &frontierV1.QueuedUri{Uri: "https://ranano.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 		{"cynergi", &frontierV1.QueuedUri{Uri: "https://cynergi.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"pdf1", &frontierV1.QueuedUri{Uri: "https://spaniaposten.no/spaniaposten.no/pdf/2004/54-SpaniaPosten.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"pdf2", &frontierV1.QueuedUri{Uri: "http://publikasjoner.nve.no/rapport/2015/rapport2015_89.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"pdf1", &frontierV1.QueuedUri{Uri: "http://publikasjoner.nve.no/rapport/2015/rapport2015_89.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 	}
 	for _, tt := range tests {
 		ctx := context.Background()
@@ -161,7 +160,7 @@ func TestSession_Fetch(t *testing.T) {
 			if err != nil {
 				t.Error(err)
 			}
-			result, err := s.Fetch(tt.url, conf)
+			result, err := s.Fetch(context.Background(), tt.url, conf)
 			if err != nil {
 				t.Error(err)
 			} else {
@@ -204,24 +203,34 @@ func setupDbMock() *database.MockConnection {
 				"label":       []map[string]interface{}{{"key": "type", "value": "extract_outlinks"}},
 			},
 			"browserScript": map[string]interface{}{
-				"type": "EXTRACT_OUTLINKS",
-				"script": `var __brzl_framesDone = new Set();
-var __brzl_compileOutlinks = function (frame) {
-    __brzl_framesDone.add(frame);
-    if (frame && frame.document) {
-        var outlinks = Array.prototype.slice.call(frame.document.querySelectorAll('a[href]'));
-        for (var i = 0; i < frame.frames.length; i++) {
-            if (frame.frames[i] && !__brzl_framesDone.has(frame.frames[i])) {
-                try {
-                    outlinks = outlinks.concat(__brzl_compileOutlinks(frame.frames[i]));
-                } catch {
-                }
+				"browserScriptType": "EXTRACT_OUTLINKS",
+				"script": `    (function extractOutlinks(frame) {
+      const framesDone = new Set();
+      function isValid(link) {
+      return (link != null
+            && link.attributes.href.value != ""
+            && link.attributes.href.value != "#"
+            && link.protocol != "tel:"
+            && link.protocol != "mailto:"
+           );
+      }
+      function compileOutlinks(frame) {
+        framesDone.add(frame);
+        if (frame && frame.document) {
+          let outlinks = Array.from(frame.document.links);
+          for (var i = 0; i < frame.frames.length; i++) {
+            if (frame.frames[i] && !framesDone.has(frame.frames[i])) {
+              try {
+                outlinks = outlinks.concat(compileOutlinks(frame.frames[i]));
+              } catch {}
             }
+          }
+          return outlinks;
         }
-    }
-    return outlinks;
-}
-__brzl_compileOutlinks(window).join('\\n');`,
+        return [];
+      }
+      return Array.from(new Set(compileOutlinks(frame).filter(isValid).map(_ => _.href)));
+    })(window);`,
 			},
 		},
 		nil,
@@ -281,32 +290,6 @@ func setupBrowser(pool *dockertest.Pool) (container *dockertest.Resource, port i
 	// exponential backoff-retry, because the application in the container might not be ready to accept connections yet
 	if err := pool.Retry(func() error {
 		_, err := http.Head("http://localhost:" + container.GetPort("3000/tcp"))
-		if err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
-		log.Fatalf("Could not connect to docker: %s", err)
-	}
-	return
-}
-
-func setupRobotsEvaluator(pool *dockertest.Pool) (container *dockertest.Resource, port int) {
-	var err error
-	// pulls an image, creates a container based on it and runs it
-	container, err = pool.Run("norsknettarkiv/veidemann-robotsevaluator-service", "0.3.8", []string{})
-	if err != nil {
-		log.Fatalf("Could not start robotsContainer: %s", err)
-	}
-
-	port, err = strconv.Atoi(container.GetPort("7053/tcp"))
-	if err != nil {
-		log.Fatalf("Could not get port for robotsContainer: %s", err)
-	}
-
-	// exponential backoff-retry, because the application in the container might not be ready to accept connections yet
-	if err := pool.Retry(func() error {
-		_, err := http.Head("http://localhost:" + container.GetPort("7053/tcp"))
 		if err != nil {
 			return err
 		}

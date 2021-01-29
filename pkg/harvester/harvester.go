@@ -25,6 +25,8 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/errors"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/metrics"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
+	"github.com/opentracing/opentracing-go"
+	tracelog "github.com/opentracing/opentracing-go/log"
 	log "github.com/sirupsen/logrus"
 	"io"
 	"strconv"
@@ -39,7 +41,7 @@ type RenderResult struct {
 	PageFetchTimeMs int64
 }
 
-type FetchFunc func(*frontierV1.QueuedUri, *configV1.ConfigObject) (*RenderResult, error)
+type FetchFunc func(context.Context, *frontierV1.QueuedUri, *configV1.ConfigObject) (*RenderResult, error)
 
 type Harvester interface {
 	Connect() error
@@ -70,7 +72,11 @@ func (h *harvester) Close() {
 }
 
 func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
-	harvestCtx, cancel := context.WithCancel(context.Background())
+	span := opentracing.StartSpan("harvest").SetTag("component", "harvester")
+	defer span.Finish()
+	spanCtx := opentracing.ContextWithSpan(context.Background(), span)
+
+	harvestCtx, cancel := context.WithCancel(spanCtx)
 	defer cancel()
 
 	stream, err := h.client.GetNextPage(harvestCtx)
@@ -92,7 +98,7 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 				return
 			}
 			if err != nil {
-				errc <- fmt.Errorf("failed to receive response from frontier: %w", err)
+				errc <- err
 				return
 			}
 			once.Do(func() {
@@ -100,44 +106,52 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 			})
 		}
 	}()
-	go func() {
-		err := stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_RequestNextPage{RequestNextPage: true}})
-		// If the error is not io.EOF it is a client side error, else the status is read by stream.Recv above.
-		if err != nil && err != io.EOF {
-			errc <- fmt.Errorf("failed to send request for new page to frontier: %w", err)
-		}
-	}()
+
+	err = stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_RequestNextPage{RequestNextPage: true}})
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to send request for new page to frontier: %w", err)
+	}
+
 	select {
 	case <-ctx.Done():
 		// ctx cancelled while requesting next page
 		return ctx.Err()
 	case err := <-errc:
+		err = fmt.Errorf("failed to get page harvest spec: %w", err)
+		span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 		return err
 	case <-waitn:
 		// initial request received
 	}
 
+	span.SetTag("harvest.spec.uri", harvestSpec.QueuedUri.Uri).
+		SetTag("harvest.spec.eid", harvestSpec.QueuedUri.ExecutionId).
+		SetTag("harvest.spec.seed_uri", harvestSpec.QueuedUri.SeedUri).
+		SetTag("harvest.spec.discovery_path", harvestSpec.QueuedUri.DiscoveryPath)
+
 	log.WithField("uri", harvestSpec.QueuedUri.Uri).Tracef("Starting fetch")
 	metrics.ActiveBrowserSessions.Inc()
+	defer metrics.ActiveBrowserSessions.Dec()
 	metrics.PagesTotal.Inc()
-	renderResult, err := fetch(harvestSpec.QueuedUri, harvestSpec.CrawlConfig)
+	renderResult, err := fetch(ctx, harvestSpec.QueuedUri, harvestSpec.CrawlConfig)
 	if err != nil {
+		span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 		log.Errorf("Failed to fetch: %v", err)
 		renderResult = &RenderResult{
 			Error: errors.CommonsError(err),
 		}
-	} else if renderResult.PageFetchTimeMs > 0 {
-		metrics.PageFetchSeconds.Observe(float64(renderResult.PageFetchTimeMs / 1000))
-	}
-
-	if renderResult.Error != nil {
+		metrics.PagesFailedTotal.WithLabelValues(strconv.Itoa(int(renderResult.Error.Code))).Inc()
 		err := stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_Error{Error: renderResult.Error}})
 		if err != nil {
-			metrics.PagesFailedTotal.WithLabelValues(strconv.Itoa(int(renderResult.Error.Code))).Inc()
-			metrics.ActiveBrowserSessions.Dec()
+			if err != io.EOF {
+				err = <-errc
+			}
 			return fmt.Errorf("failed to send error response to Frontier: %w", err)
 		}
 	} else {
+		if renderResult.PageFetchTimeMs > 0 {
+			metrics.PageFetchSeconds.Observe(float64(renderResult.PageFetchTimeMs / 1000))
+		}
 		err := stream.Send(&frontierV1.PageHarvest{
 			Msg: &frontierV1.PageHarvest_Metrics_{
 				Metrics: &frontierV1.PageHarvest_Metrics{
@@ -147,18 +161,28 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 			},
 		})
 		if err != nil {
+			if err == io.EOF {
+				err = <-errc
+			}
 			return fmt.Errorf("failed to send metrics to Frontier: %w", err)
 		}
 
 		for _, outlink := range renderResult.Outlinks {
-			if err := stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_Outlink{Outlink: outlink}}); err != nil {
-				metrics.ActiveBrowserSessions.Dec()
+			err := stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_Outlink{Outlink: outlink}})
+			if err != nil {
+				if err == io.EOF {
+					err = <-errc
+				}
 				return fmt.Errorf("failed to send outlink to Frontier: %w", err)
 			}
 		}
 	}
 
-	metrics.ActiveBrowserSessions.Dec()
+	span.SetTag("harvest.page_fetch_time_ms", renderResult.PageFetchTimeMs)
+	span.SetTag("harvest.uri_count", renderResult.UriCount)
+	span.SetTag("harvest.bytes_downloaded", renderResult.BytesDownloaded)
+	span.SetTag("harvest.outlinks", len(renderResult.Outlinks))
+
 	if err := stream.CloseSend(); err != nil {
 		return fmt.Errorf("failed to close send: %w", err)
 	}

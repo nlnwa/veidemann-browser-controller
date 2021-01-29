@@ -26,8 +26,8 @@ import (
 	"github.com/chromedp/cdproto/security"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/requests"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/url"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -132,7 +132,7 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 					continueRequest = continueRequest.WithURL(ev.Request.URL).WithMethod(ev.Request.Method)
 					req := &requests.Request{
 						Method:       ev.Request.Method,
-						Url:          database.NormalizeUrl(ev.Request.URL + ev.Request.URLFragment),
+						Url:          url.Normalize(ev.Request.URL + ev.Request.URLFragment),
 						RequestId:    ev.RequestID.String(),
 						NetworkId:    ev.NetworkID.String(),
 						Referrer:     interfaceToString(ev.Request.Headers["Referer"]),

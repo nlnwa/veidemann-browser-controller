@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-package database
+package url
 
 import "github.com/nlnwa/whatwg-url/url"
 
-func NormalizeUrl(u string) string {
+func Normalize(u string) string {
 	p, err := url.Parse(u)
 	if err != nil {
 		return u

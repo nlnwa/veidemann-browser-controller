@@ -17,12 +17,14 @@
 package database
 
 import (
+	"context"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/encoding/protojson"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
 	"os"
+	"time"
 )
 
 type MockConnection struct {
@@ -36,8 +38,11 @@ func NewMockConnection() DbConnection {
 			dbConnectOpts: r.ConnectOpts{
 				NumRetries: 10,
 			},
-			dbSession: r.NewMock(),
-		}}
+			dbSession:    r.NewMock(),
+			queryTimeout: 5 * time.Second,
+			logger:       log.WithField("component", "mock connection"),
+		},
+	}
 }
 
 func (c *MockConnection) Close() error {
@@ -50,7 +55,7 @@ func (c *MockConnection) GetMock() *r.Mock {
 	return c.dbSession.(*r.Mock)
 }
 
-func (c *MockConnection) WriteCrawlLog(crawlLog *frontierV1.CrawlLog) error {
+func (c *MockConnection) WriteCrawlLogs(ctx context.Context, crawlLogs []*frontierV1.CrawlLog) error {
 	f, err := os.OpenFile("crawl.log",
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -60,14 +65,20 @@ func (c *MockConnection) WriteCrawlLog(crawlLog *frontierV1.CrawlLog) error {
 		_ = f.Close()
 	}()
 
-	if _, err := f.WriteString(protojson.Format(crawlLog) + "\n"); err != nil {
-		log.Println(err)
+	for _, crawlLog := range crawlLogs {
+		if _, err := f.WriteString(protojson.Format(crawlLog) + "\n"); err != nil {
+			log.Println(err)
+		}
 	}
 
-	return c.connection.WriteCrawlLog(crawlLog)
+	return c.connection.WriteCrawlLogs(ctx, crawlLogs)
 }
 
-func (c *MockConnection) WritePageLog(pageLog *frontierV1.PageLog) error {
+func (c *MockConnection) WriteCrawlLog(ctx context.Context, crawlLog *frontierV1.CrawlLog) error {
+	return c.WriteCrawlLogs(ctx, []*frontierV1.CrawlLog{crawlLog})
+}
+
+func (c *MockConnection) WritePageLog(ctx context.Context, pageLog *frontierV1.PageLog) error {
 	f, err := os.OpenFile("page.log",
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -80,23 +91,13 @@ func (c *MockConnection) WritePageLog(pageLog *frontierV1.PageLog) error {
 	if _, err := f.WriteString(protojson.Format(pageLog) + "\n"); err != nil {
 		log.Println(err)
 	}
-	return c.connection.WritePageLog(pageLog)
+	return c.connection.WritePageLog(ctx, pageLog)
 }
 
-func (c *MockConnection) GetSeedByUri(uri *frontierV1.QueuedUri) (*configV1.ConfigObject, error) {
-	return &configV1.ConfigObject{
-		Id: uri.Uri,
-		Meta: &configV1.Meta{
-			Name:       uri.Uri,
-			Annotation: make([]*configV1.Annotation, 0),
-		},
-	}, nil
+func (c *MockConnection) GetConfig(ctx context.Context, ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
+	return c.connection.GetConfig(ctx, ref)
 }
 
-func (c *MockConnection) GetConfig(ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
-	return c.connection.GetConfig(ref)
-}
-
-func (c *MockConnection) GetConfigsForSelector(kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
-	return c.connection.GetConfigsForSelector(kind, label)
+func (c *MockConnection) GetConfigsForSelector(ctx context.Context, kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
+	return c.connection.GetConfigsForSelector(ctx, kind, label)
 }
