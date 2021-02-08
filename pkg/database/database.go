@@ -35,6 +35,7 @@ type connection struct {
 	queryTimeout       time.Duration
 	maxOpenConnections int
 	logger             *log.Entry
+	batchSize          int
 }
 
 type Options struct {
@@ -66,6 +67,7 @@ func NewConnection(opts Options) DbConnection {
 		maxRetries:   opts.MaxRetries,
 		waitTimeout:  60 * time.Second,
 		queryTimeout: opts.QueryTimeout,
+		batchSize:    200,
 		logger:       log.WithField("component", "database"),
 	}
 }
@@ -136,8 +138,29 @@ func (c *connection) WriteCrawlLog(ctx context.Context, crawlLog *frontierV1.Cra
 }
 
 func (c *connection) WriteCrawlLogs(ctx context.Context, crawlLogs []*frontierV1.CrawlLog) error {
-	term := r.Table("crawl_log").Insert(crawlLogs)
-	return c.execWrite(ctx, "write-crawl-log(s)", &term)
+	if len(crawlLogs) < 1 {
+		return nil
+	} else if c.batchSize == 0 || len(crawlLogs) <= c.batchSize {
+		term := r.Table("crawl_log").Insert(crawlLogs)
+		return c.execWrite(ctx, "write-crawl-log(s)", &term)
+	}
+	nrOfBatches := len(crawlLogs) / c.batchSize
+	if len(crawlLogs)%c.batchSize > 0 {
+		nrOfBatches += 1
+	}
+	for i := 0; i < nrOfBatches; i++ {
+		lowIndex := i * c.batchSize
+		highIndex := (i + 1) * c.batchSize
+		if highIndex > len(crawlLogs) {
+			highIndex = i*c.batchSize + len(crawlLogs)%c.batchSize
+		}
+		term := r.Table("crawl_log").Insert(crawlLogs[lowIndex:highIndex])
+		err := c.execWrite(ctx, "write-crawl-log(s)", &term)
+		if err != nil {
+			return fmt.Errorf("failed to write batch %d of %d: %w", i+1, nrOfBatches, err)
+		}
+	}
+	return nil
 }
 
 func (c *connection) WritePageLog(ctx context.Context, pageLog *frontierV1.PageLog) error {
@@ -173,6 +196,7 @@ func (c *connection) execWrite(ctx context.Context, name string, term *r.Term) e
 // execWithRetry executes given query function repeatedly until successful or max retry limit is reached
 func (c *connection) execWithRetry(ctx context.Context, name string, q func(ctx context.Context) (*r.Cursor, error)) (cursor *r.Cursor, err error) {
 	attempts := 0
+	logger := c.logger.WithField("operation", name)
 out:
 	for {
 		attempts++
@@ -180,20 +204,17 @@ out:
 		if err == nil {
 			return
 		}
-		c.logger.WithError(err).
-			WithField("operation", name).
-			WithField("retries", attempts-1).
-			Warn()
+		logger.WithError(err).WithField("retries", attempts-1).Warn()
 		switch err {
 		case r.ErrQueryTimeout:
 			err := c.wait()
 			if err != nil {
-				c.logger.WithError(err).Warn()
+				logger.WithError(err).Warn()
 			}
 		case r.ErrConnectionClosed:
 			err := c.Connect()
 			if err != nil {
-				c.logger.WithError(err).Warn()
+				logger.WithError(err).Warn()
 			}
 		default:
 			break out
@@ -214,14 +235,9 @@ func (c *connection) exec(ctx context.Context, q func(ctx context.Context) (*r.C
 
 // wait waits for database to be fully up date and ready for read/write
 func (c *connection) wait() error {
-	ctx, cancel := context.WithTimeout(context.Background(), (10*time.Second)+c.waitTimeout)
-	defer cancel()
-	runOpts := r.RunOpts{
-		Context: ctx,
-	}
 	waitOpts := r.WaitOpts{
 		Timeout: c.waitTimeout,
 	}
-	_, err := r.DB(c.dbConnectOpts.Database).Wait(waitOpts).Run(c.dbSession, runOpts)
+	_, err := r.DB(c.dbConnectOpts.Database).Wait(waitOpts).Run(c.dbSession)
 	return err
 }
