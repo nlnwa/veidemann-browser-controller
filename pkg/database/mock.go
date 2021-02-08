@@ -39,6 +39,7 @@ func NewMockConnection() DbConnection {
 				NumRetries: 10,
 			},
 			dbSession:    r.NewMock(),
+			batchSize: 200,
 			queryTimeout: 5 * time.Second,
 			logger:       log.WithField("component", "mock connection"),
 		},
