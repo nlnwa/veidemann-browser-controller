@@ -17,7 +17,7 @@
 package requests
 
 import (
-	"github.com/nlnwa/veidemann-api/go/frontier/v1"
+	logV1 "github.com/nlnwa/veidemann-api/go/log/v1"
 )
 
 type Request struct {
@@ -25,7 +25,7 @@ type Request struct {
 	Url            string
 	RequestId      string
 	NetworkId      string
-	CrawlLog       *frontier.CrawlLog
+	CrawlLog       *logV1.CrawlLog
 	GotNew         bool
 	GotComplete    bool
 	Initiator      string

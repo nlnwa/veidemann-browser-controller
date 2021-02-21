@@ -20,6 +20,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/harvester"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/robotsevaluator"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
+	"github.com/nlnwa/veidemann-log-service/pkg/logclient"
 	"time"
 )
 
@@ -30,6 +31,7 @@ type browserControllerOptions struct {
 	listenPort      int
 	harvester       harvester.Harvester
 	robotsEvaluator robotsevaluator.RobotsEvaluator
+	logClient       *logclient.LogClient
 	sessionOpts     []session.Option
 	maxSessions     int
 	closeTimeout    time.Duration
@@ -86,6 +88,12 @@ func WithHarvester(harvester harvester.Harvester) BrowserControllerOption {
 func WithRobotsEvaluator(robotsevaluator robotsevaluator.RobotsEvaluator) BrowserControllerOption {
 	return newFuncBrowserControllerOption(func(c *browserControllerOptions) {
 		c.robotsEvaluator = robotsevaluator
+	})
+}
+
+func WithLogClient(logClient *logclient.LogClient) BrowserControllerOption {
+	return newFuncBrowserControllerOption(func(c *browserControllerOptions) {
+		c.logClient = logClient
 	})
 }
 

@@ -86,16 +86,6 @@ func init() {
 		decodeCrawlExecutionStatus,
 	)
 	encoding.SetTypeEncoding(
-		reflect.TypeOf(&frontierV1.CrawlLog{}),
-		encodeProtoMessage,
-		nil,
-	)
-	encoding.SetTypeEncoding(
-		reflect.TypeOf(&frontierV1.PageLog{}),
-		encodeProtoMessage,
-		nil,
-	)
-	encoding.SetTypeEncoding(
 		reflect.TypeOf(map[string]interface{}{}),
 		func(value interface{}) (i interface{}, err error) {
 			m := value.(map[string]interface{})

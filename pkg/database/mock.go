@@ -19,9 +19,7 @@ package database
 import (
 	"context"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
-	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/protobuf/encoding/protojson"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
 	"os"
 	"time"
@@ -54,45 +52,6 @@ func (c *MockConnection) Close() error {
 
 func (c *MockConnection) GetMock() *r.Mock {
 	return c.dbSession.(*r.Mock)
-}
-
-func (c *MockConnection) WriteCrawlLogs(ctx context.Context, crawlLogs []*frontierV1.CrawlLog) error {
-	f, err := os.OpenFile("crawl.log",
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Println(err)
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-
-	for _, crawlLog := range crawlLogs {
-		if _, err := f.WriteString(protojson.Format(crawlLog) + "\n"); err != nil {
-			log.Println(err)
-		}
-	}
-
-	return c.connection.WriteCrawlLogs(ctx, crawlLogs)
-}
-
-func (c *MockConnection) WriteCrawlLog(ctx context.Context, crawlLog *frontierV1.CrawlLog) error {
-	return c.WriteCrawlLogs(ctx, []*frontierV1.CrawlLog{crawlLog})
-}
-
-func (c *MockConnection) WritePageLog(ctx context.Context, pageLog *frontierV1.PageLog) error {
-	f, err := os.OpenFile("page.log",
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Println(err)
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-
-	if _, err := f.WriteString(protojson.Format(pageLog) + "\n"); err != nil {
-		log.Println(err)
-	}
-	return c.connection.WritePageLog(ctx, pageLog)
 }
 
 func (c *MockConnection) GetConfig(ctx context.Context, ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {

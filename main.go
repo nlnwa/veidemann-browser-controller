@@ -28,6 +28,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/tracing"
+	logwriter "github.com/nlnwa/veidemann-log-service/pkg/logclient"
 	"github.com/opentracing/opentracing-go"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
@@ -57,6 +58,9 @@ func main() {
 
 	pflag.String("frontier-host", "veidemann-frontier", "Frontier host")
 	pflag.Int("frontier-port", 7700, "Frontier port")
+
+	pflag.String("log-service-host", "veidemann-log-service", "Log service host")
+	pflag.Int("log-service-port", 8080, "Log service port")
 
 	pflag.String("robots-evaluator-host", "veidemann-robotsevaluator-service", "Robots evaluator host")
 	pflag.Int("robots-evaluator-port", 7053, "Robots evaluator port")
@@ -155,6 +159,17 @@ func main() {
 	}
 	defer robotsEvaluator.Close()
 
+	logWriter := logwriter.New(
+		logwriter.WithConnectTimeout(connectTimeout),
+		logwriter.WithHost(viper.GetString("log-service-host")),
+		logwriter.WithPort(viper.GetInt("log-service-port")),
+	)
+	if err := logWriter.Connect(); err != nil {
+		log.WithError(err).Error()
+		return
+	}
+	defer logWriter.Close()
+
 	db := database.NewConnection(
 		database.Options{
 			Host:               viper.GetString("db-host"),
@@ -183,6 +198,7 @@ func main() {
 		controller.WithHarvester(harvester),
 		controller.WithRobotsEvaluator(robotsEvaluator),
 		controller.WithSessionOptions(
+			session.WithLogWriter(logWriter),
 			session.WithScreenshotWriter(screenshotwriter),
 			session.WithBrowserHost(viper.GetString("browser-host")),
 			session.WithBrowserPort(viper.GetInt("browser-port")),

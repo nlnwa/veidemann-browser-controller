@@ -19,6 +19,7 @@ package session
 import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
+	"github.com/nlnwa/veidemann-log-service/pkg/logclient"
 )
 
 // SessionOption configures Session Registry.
@@ -75,5 +76,11 @@ func WithDbAdapter(dbAdapter *database.DbAdapter) Option {
 func WithScreenshotWriter(sw screenshotwriter.ScreenshotWriter) Option {
 	return newFuncOption(func(s *Session) {
 		s.screenShotWriter = sw
+	})
+}
+
+func WithLogWriter(lc *logclient.LogClient) Option {
+	return newFuncOption(func(s *Session) {
+		s.logClient = lc
 	})
 }
