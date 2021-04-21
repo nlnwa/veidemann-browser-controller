@@ -20,7 +20,7 @@ require (
 	github.com/mitchellh/mapstructure v1.3.3 // indirect
 	github.com/nlnwa/veidemann-api/go v0.0.0-20210413093311-7ff38e848604
 	github.com/nlnwa/veidemann-log-service v0.1.0
-	github.com/nlnwa/veidemann-recorderproxy v0.2.9-0.20210406160521-ae4ea26786d0
+	github.com/nlnwa/veidemann-recorderproxy v0.3.0
 	github.com/nlnwa/whatwg-url v0.1.0
 	github.com/opencontainers/image-spec v1.0.1 // indirect
 	github.com/opentracing/opentracing-go v1.2.0
