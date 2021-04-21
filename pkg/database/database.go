@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
-	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	log "github.com/sirupsen/logrus"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
 	"time"
@@ -131,41 +130,6 @@ func (c *connection) GetConfigsForSelector(ctx context.Context, kind configV1.Ki
 	}
 
 	return configObjects, nil
-}
-
-func (c *connection) WriteCrawlLog(ctx context.Context, crawlLog *frontierV1.CrawlLog) error {
-	return c.WriteCrawlLogs(ctx, []*frontierV1.CrawlLog{crawlLog})
-}
-
-func (c *connection) WriteCrawlLogs(ctx context.Context, crawlLogs []*frontierV1.CrawlLog) error {
-	if len(crawlLogs) < 1 {
-		return nil
-	} else if c.batchSize == 0 || len(crawlLogs) <= c.batchSize {
-		term := r.Table("crawl_log").Insert(crawlLogs)
-		return c.execWrite(ctx, "write-crawl-log(s)", &term)
-	}
-	nrOfBatches := len(crawlLogs) / c.batchSize
-	if len(crawlLogs)%c.batchSize > 0 {
-		nrOfBatches += 1
-	}
-	for i := 0; i < nrOfBatches; i++ {
-		lowIndex := i * c.batchSize
-		highIndex := (i + 1) * c.batchSize
-		if highIndex > len(crawlLogs) {
-			highIndex = i*c.batchSize + len(crawlLogs)%c.batchSize
-		}
-		term := r.Table("crawl_log").Insert(crawlLogs[lowIndex:highIndex])
-		err := c.execWrite(ctx, "write-crawl-log(s)", &term)
-		if err != nil {
-			return fmt.Errorf("failed to write batch %d of %d: %w", i+1, nrOfBatches, err)
-		}
-	}
-	return nil
-}
-
-func (c *connection) WritePageLog(ctx context.Context, pageLog *frontierV1.PageLog) error {
-	term := r.Table("page_log").Insert(pageLog)
-	return c.execWrite(ctx, "write-page-log", &term)
 }
 
 // execRead executes the given read term with a timeout

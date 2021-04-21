@@ -49,7 +49,7 @@ func (bc *BrowserController) Run() error {
 		bc.opts.sessionOpts...,
 	)
 
-	apiServer := server.NewApiServer(bc.opts.listenInterface, bc.opts.listenPort, sessions, bc.opts.robotsEvaluator)
+	apiServer := server.NewApiServer(bc.opts.listenInterface, bc.opts.listenPort, sessions, bc.opts.robotsEvaluator, bc.opts.logClient)
 	go func() {
 		err := apiServer.Start()
 		if err != nil {

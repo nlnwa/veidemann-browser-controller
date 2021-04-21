@@ -19,9 +19,7 @@ package database
 import (
 	"context"
 	"fmt"
-	"github.com/golang/protobuf/ptypes"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
-	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	"strings"
 	"sync"
 	"time"
@@ -105,9 +103,6 @@ type DbConnection interface {
 	Close() error
 	GetConfig(ctx context.Context, ref *configV1.ConfigRef) (*configV1.ConfigObject, error)
 	GetConfigsForSelector(ctx context.Context, kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error)
-	WriteCrawlLog(ctx context.Context, crawlLog *frontierV1.CrawlLog) error
-	WriteCrawlLogs(ctx context.Context, crawlLogs []*frontierV1.CrawlLog) error
-	WritePageLog(ctx context.Context, pageLog *frontierV1.PageLog) error
 }
 
 type DbAdapter struct {
@@ -179,19 +174,4 @@ func (cc *DbAdapter) GetScripts(ctx context.Context, browserConfig *configV1.Bro
 		}
 	}
 	return scripts, nil
-}
-
-func (cc *DbAdapter) WriteCrawlLog(ctx context.Context, crawlLog *frontierV1.CrawlLog) error {
-	return cc.WriteCrawlLogs(ctx, []*frontierV1.CrawlLog{crawlLog})
-}
-
-func (cc *DbAdapter) WriteCrawlLogs(ctx context.Context, crawlLogs []*frontierV1.CrawlLog) error {
-	for _, crawlLog := range crawlLogs {
-		crawlLog.TimeStamp = ptypes.TimestampNow()
-	}
-	return cc.db.WriteCrawlLogs(ctx, crawlLogs)
-}
-
-func (cc *DbAdapter) WritePageLog(ctx context.Context, pageLog *frontierV1.PageLog) error {
-	return cc.db.WritePageLog(ctx, pageLog)
 }

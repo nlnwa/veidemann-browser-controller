@@ -31,20 +31,22 @@ import (
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/device"
-	"github.com/golang/protobuf/ptypes"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
+	logV1 "github.com/nlnwa/veidemann-api/go/log/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/errors"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/harvester"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/requests"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/syncx"
+	"github.com/nlnwa/veidemann-log-service/pkg/logclient"
 	"github.com/nlnwa/whatwg-url/url"
 	"github.com/opentracing/opentracing-go"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"math"
 	"net/http"
 	"runtime/debug"
@@ -67,17 +69,18 @@ type Session struct {
 	BrowserVersion    string
 	Requests          requests.RequestRegistry
 	currentLoading    int32
-	frameWg           *syncx.WaitGroup
-	loadCancel        func()
-	netActivityTimer  *syncx.CompletionTimer
-	timer             *syncx.CompletionTimer
-	RequestedUrl      *frontierV1.QueuedUri
-	CrawlConfig       *configV1.CrawlConfig
-	browserConfig     *configV1.BrowserConfig
-	PolitenessConfig  *configV1.ConfigObject
-	DbAdapter         *database.DbAdapter
-	screenShotWriter  screenshotwriter.ScreenshotWriter
-	scripts           *sessionScripts
+	frameWg          *syncx.WaitGroup
+	loadCancel       func()
+	netActivityTimer *syncx.CompletionTimer
+	timer            *syncx.CompletionTimer
+	RequestedUrl     *frontierV1.QueuedUri
+	CrawlConfig      *configV1.CrawlConfig
+	browserConfig    *configV1.BrowserConfig
+	PolitenessConfig *configV1.ConfigObject
+	DbAdapter        *database.DbAdapter
+	screenShotWriter screenshotwriter.ScreenshotWriter
+	logClient        *logclient.LogClient
+	scripts          *sessionScripts
 }
 
 func newDefaultSession(opts ...Option) *Session {
@@ -343,8 +346,8 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 
 	var crawlLogCount int32
 	var bytesDownloaded int64
-	var resources []*frontierV1.PageLog_Resource
-	var crawlLogs []*frontierV1.CrawlLog
+	var resources []*logV1.PageLog_Resource
+	var crawlLogs []*logV1.CrawlLog
 
 	sess.Requests.Walk(func(r *requests.Request) {
 		if r.CrawlLog != nil && r.CrawlLog.WarcId != "" {
@@ -356,12 +359,12 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 		}
 
 		if r.CrawlLog != nil {
-			resource := &frontierV1.PageLog_Resource{
+			resource := &logV1.PageLog_Resource{
 				Uri:           r.Url,
 				FromCache:     r.FromCache,
 				Renderable:    false,
 				ResourceType:  r.ResourceType,
-				MimeType:      r.CrawlLog.ContentType,
+				ContentType:   r.CrawlLog.ContentType,
 				StatusCode:    r.CrawlLog.StatusCode,
 				DiscoveryPath: r.CrawlLog.DiscoveryPath,
 				WarcId:        r.CrawlLog.WarcId,
@@ -374,12 +377,14 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 			log.Warnf("No crawllog for resource. Skipping %v %v %v. Got new: %v, Got complete %v", r.RequestId, r.Method, r.Url, r.GotNew, r.GotComplete)
 		}
 	})
-	if err := sess.DbAdapter.WriteCrawlLogs(ctx, crawlLogs); err != nil {
+	if err := sess.logClient.WriteCrawlLogs(ctx, crawlLogs); err != nil {
 		log.Errorf("Error writing crawlLogs: %v", err)
+	} else {
+		log.Debugf("%d crawlLogs written", len(crawlLogs))
 	}
 
 	if sess.Requests.InitialRequest() != nil && sess.Requests.InitialRequest().CrawlLog != nil {
-		pageLog := &frontierV1.PageLog{
+		pageLog := &logV1.PageLog{
 			WarcId:              sess.Requests.InitialRequest().CrawlLog.WarcId,
 			Uri:                 sess.RequestedUrl.Uri,
 			ExecutionId:         sess.RequestedUrl.ExecutionId,
@@ -390,7 +395,7 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 			Resource:            resources,
 			Outlink:             outlinks,
 		}
-		if err := sess.DbAdapter.WritePageLog(ctx, pageLog); err != nil {
+		if err := sess.logClient.WritePageLog(ctx, pageLog); err != nil {
 			log.Errorf("Error writing pageLog: %v", err)
 		} else {
 			log.WithField("uri", sess.RequestedUrl.Uri).Debugf("Pagelog written")
@@ -403,7 +408,7 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 	for i, uri := range outlinks {
 		qUris[i] = &frontierV1.QueuedUri{
 			ExecutionId:         sess.RequestedUrl.ExecutionId,
-			DiscoveredTimeStamp: ptypes.TimestampNow(),
+			DiscoveredTimeStamp: timestamppb.Now(),
 			Uri:                 uri,
 			DiscoveryPath:       sess.Requests.RootRequest().CrawlLog.DiscoveryPath + "L",
 			Referrer:            sess.Requests.RootRequest().Url,

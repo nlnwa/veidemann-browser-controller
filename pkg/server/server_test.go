@@ -27,6 +27,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/testutil"
+	"github.com/nlnwa/veidemann-log-service/pkg/logclient"
 	"github.com/nlnwa/veidemann-recorderproxy/recorderproxy"
 	"github.com/nlnwa/veidemann-recorderproxy/serviceconnections"
 	proxyTestUtil "github.com/nlnwa/veidemann-recorderproxy/testutil"
@@ -78,6 +79,16 @@ func TestMain(m *testing.M) {
 			_ = os.Remove("screenshot.png")
 		},
 	}
+	logServiceMock := testutil.NewLogServiceMock(5002)
+
+	logWriter := logclient.New(
+		logclient.WithPort(5002),
+	)
+	if err := logWriter.Connect(); err != nil {
+		log.Fatal(err)
+		return
+	}
+
 	sessions = session.NewRegistry(
 		2,
 		session.WithBrowserPort(browserPort),
@@ -85,12 +96,13 @@ func TestMain(m *testing.M) {
 		session.WithProxyPort(6666),
 		session.WithDbAdapter(dbAdapter),
 		session.WithScreenshotWriter(screenShotWriter),
+		session.WithLogWriter(logWriter),
 	)
 
 	robotsEvaluator := &testutil.RobotsEvaluatorMock{IsAllowedFunc: func(_ *robotsevaluatorV1.IsAllowedRequest) bool {
 		return true
 	}}
-	apiServer := NewApiServer("", 7777, sessions, robotsEvaluator)
+	apiServer := NewApiServer("", 7777, sessions, robotsEvaluator, logWriter)
 	go func() {
 		_ = apiServer.Start()
 	}()
@@ -121,6 +133,8 @@ func TestMain(m *testing.M) {
 	recorderProxy2.Close()
 	screenShotWriter.Close()
 	_ = dbMock.Close()
+	_ = logWriter.Close()
+	logServiceMock.Close()
 
 	os.Exit(code)
 }
@@ -150,8 +164,8 @@ func TestSession_Fetch(t *testing.T) {
 		{"db", &frontierV1.QueuedUri{Uri: "http://db.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 		{"maps", &frontierV1.QueuedUri{Uri: "https://goo.gl/maps/EmpIH", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 		{"ranano", &frontierV1.QueuedUri{Uri: "https://ranano.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"cynergi", &frontierV1.QueuedUri{Uri: "https://cynergi.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"pdf1", &frontierV1.QueuedUri{Uri: "http://publikasjoner.nve.no/rapport/2015/rapport2015_89.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"cynergi", &frontierV1.QueuedUri{Uri: "https://www.cynergi.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		{"pdf1", &frontierV1.QueuedUri{Uri: "https://www.nb.no/content/uploads/2019/04/tildelingsbrev_nasjonalbiblioteket_2019.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 	}
 	for _, tt := range tests {
 		ctx := context.Background()

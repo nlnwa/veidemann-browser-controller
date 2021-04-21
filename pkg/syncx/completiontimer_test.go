@@ -35,7 +35,6 @@ func NewChecker(okCheckDelay time.Duration) *checker {
 }
 
 func (c *checker) check() bool {
-	fmt.Printf("do %v %v\n", time.Since(c.startTime) > c.okCheckDelay, c.okCheckDelay)
 	return time.Since(c.startTime) > c.okCheckDelay
 }
 
@@ -130,8 +129,7 @@ func Test_completionTimer_WaitForCompletion(t1 *testing.T) {
 			go func() {
 				for {
 					select {
-					case xx := <-tc.C:
-						fmt.Printf("Notify %v\n", xx)
+					case <-tc.C:
 						t.Notify()
 					case <-stop:
 						return

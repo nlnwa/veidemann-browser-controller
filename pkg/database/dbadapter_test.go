@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
-	"github.com/nlnwa/veidemann-api/go/frontier/v1"
 	"reflect"
 	"testing"
 	"time"
@@ -40,18 +39,6 @@ func (d *dbConnMock) Close() error {
 }
 
 func (d *dbConnMock) GetConfigsForSelector(_ context.Context, _ configV1.Kind, _ *configV1.Label) ([]*configV1.ConfigObject, error) {
-	panic("implement me")
-}
-
-func (d *dbConnMock) WriteCrawlLog(_ context.Context, _ *frontier.CrawlLog) error {
-	panic("implement me")
-}
-
-func (d *dbConnMock) WriteCrawlLogs(_ context.Context, _ []*frontier.CrawlLog) error {
-	panic("implement me")
-}
-
-func (d *dbConnMock) WritePageLog(_ context.Context, _ *frontier.PageLog) error {
 	panic("implement me")
 }
 
