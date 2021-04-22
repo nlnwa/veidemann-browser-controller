@@ -108,20 +108,30 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 	}()
 
 	err = stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_RequestNextPage{RequestNextPage: true}})
-	if err != nil && err != io.EOF {
+	if err != nil {
+		if err == io.EOF {
+			err = <-errc
+		}
 		return fmt.Errorf("failed to send request for new page to frontier: %w", err)
 	}
 
 	select {
 	case <-ctx.Done():
-		// ctx cancelled while requesting next page
+		// ctx cancelled while waiting for harvest spec
+		_ = stream.CloseSend()
 		return ctx.Err()
 	case err := <-errc:
-		err = fmt.Errorf("failed to get page harvest spec: %w", err)
-		span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
-		return err
+		if err != nil {
+			// error received from frontier while waiting for harvest spec
+			err = fmt.Errorf("failed to get page harvest spec: %w", err)
+			span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
+			return err
+		} else {
+			// stream closed by frontier while waiting for harvest spec
+			return nil
+		}
 	case <-waitn:
-		// initial request received
+		// harvest spec received
 	}
 
 	span.SetTag("harvest.spec.uri", harvestSpec.QueuedUri.Uri).
@@ -143,7 +153,7 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 		metrics.PagesFailedTotal.WithLabelValues(strconv.Itoa(int(renderResult.Error.Code))).Inc()
 		err := stream.Send(&frontierV1.PageHarvest{Msg: &frontierV1.PageHarvest_Error{Error: renderResult.Error}})
 		if err != nil {
-			if err != io.EOF {
+			if err == io.EOF {
 				err = <-errc
 			}
 			return fmt.Errorf("failed to send error response to Frontier: %w", err)
@@ -183,8 +193,6 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 	span.SetTag("harvest.bytes_downloaded", renderResult.BytesDownloaded)
 	span.SetTag("harvest.outlinks", len(renderResult.Outlinks))
 
-	if err := stream.CloseSend(); err != nil {
-		return fmt.Errorf("failed to close send: %w", err)
-	}
+	_ = stream.CloseSend()
 	return <-errc
 }
