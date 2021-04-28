@@ -35,8 +35,11 @@ var decodeConfigObject = func(encoded interface{}, value reflect.Value) error {
 	}
 
 	var co configV1.ConfigObject
-	err = protojson.Unmarshal(b, &co)
-	if err != nil {
+	unmarshaller := protojson.UnmarshalOptions{
+		AllowPartial:      true,
+		DiscardUnknown:    true,
+	}
+	if err := unmarshaller.Unmarshal(b, &co); err != nil {
 		return fmt.Errorf("error decoding ConfigObject: %w", err)
 	}
 
