@@ -33,6 +33,7 @@ import (
 	"github.com/chromedp/chromedp/device"
 	"github.com/google/uuid"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
+	eventHandlerV1 "github.com/nlnwa/veidemann-api/go/eventhandler/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	logV1 "github.com/nlnwa/veidemann-api/go/log/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
@@ -430,6 +431,8 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 		PageFetchTimeMs: fetchDuration.Milliseconds(),
 	}
 
+	sess.AlternativeSeed(ctx)
+
 	log.Debugf("Fetch done: %v", QUri.Uri)
 	return result, nil
 }
@@ -597,3 +600,62 @@ func (sess *Session) AbortFetch() {
 	sess.frameWg.Cancel()
 	sess.loadCancel()
 }
+
+func (sess *Session) AlternativeSeed(ctx context.Context) {
+	if sess.Requests.RootRequest().CrawlLog == nil || sess.Requests.RootRequest().RedirectParent == nil {
+		return
+	}
+	discoveryPath := sess.Requests.RootRequest().CrawlLog.DiscoveryPath
+	if discoveryPath != "R" && discoveryPath != "RR" {
+		return
+	}
+	data := []*eventHandlerV1.Data{
+		{
+			Key:   "Url",
+			Value: sess.Requests.InitialRequest().Url,
+		},
+
+		{
+			Key:   "Alternative Url",
+			Value: sess.Requests.RootRequest().CrawlLog.RequestedUri,
+		},
+
+		{
+			Key:   "Discovery path",
+			Value: discoveryPath,
+		},
+	}
+
+	seed, err := sess.DbAdapter.GetSeedByExecutionId(ctx, sess.Requests.RootRequest().CrawlLog.ExecutionId)
+	if err != nil {
+		log.Errorf("Failed to get seed by execution id")
+	}
+
+	data = append(data, &eventHandlerV1.Data{
+		Key:   "SeedId",
+		Value: seed.Id,
+	})
+
+	event := &eventHandlerV1.EventObject{
+		Type:     "Alternative seed",
+		Source:   "veidemann-browser-controller",
+		State:    eventHandlerV1.EventObject_NEW,
+		Data:     data,
+		Severity: eventHandlerV1.EventObject_INFO,
+		Activity: []*eventHandlerV1.Activity{
+			{
+				ModifiedBy:   "veidemann-browser-controller",
+				ModifiedTime: timestamppb.Now(),
+				Description: []*eventHandlerV1.Activity_Change{
+					{
+						Type:   eventHandlerV1.Activity_CREATED,
+					},
+				},
+			},
+		},
+	}
+	if err := sess.DbAdapter.WriteEvent(ctx, event); err != nil {
+		log.Errorf("Error writing alternative seed event: %v", err)
+	}
+}
+
