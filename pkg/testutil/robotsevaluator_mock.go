@@ -26,7 +26,7 @@ type RobotsEvaluatorMock struct {
 	// optional function to call at connect time
 	ConnectFunc func() error
 	// optional function to call when RobotsEvaluator is closing
-	CloseFunc func()
+	CloseFunc func() error
 	// optional function to call when IsAllowed is called on RobotsEvaluator. IsAllowed will always return true if this
 	// is not set
 	IsAllowedFunc func(*robotsevaluatorV1.IsAllowedRequest) bool
@@ -39,10 +39,11 @@ func (r *RobotsEvaluatorMock) Connect() error {
 	return nil
 }
 
-func (r *RobotsEvaluatorMock) Close() {
+func (r *RobotsEvaluatorMock) Close() error {
 	if r.CloseFunc != nil {
-		r.CloseFunc()
+		return r.CloseFunc()
 	}
+	return nil
 }
 
 func (r *RobotsEvaluatorMock) IsAllowed(_ context.Context, request *robotsevaluatorV1.IsAllowedRequest) bool {

@@ -44,31 +44,28 @@ type RenderResult struct {
 type FetchFunc func(context.Context, *frontierV1.QueuedUri, *configV1.ConfigObject) (*RenderResult, error)
 
 type Harvester interface {
-	Connect() error
-	Close()
+	serviceconnections.Connection
 	Harvest(context.Context, FetchFunc) error
 }
 
 type harvester struct {
-	clientConn *serviceconnections.ClientConn
-	client     frontierV1.FrontierClient
+	*serviceconnections.ClientConn
+	frontierV1.FrontierClient
 }
 
 func New(opts ...serviceconnections.ConnectionOption) Harvester {
-	return &harvester{clientConn: serviceconnections.NewClientConn("Frontier", opts...)}
-}
-
-func (h *harvester) Connect() error {
-	if err := h.clientConn.Connect(); err != nil {
-		return err
-	} else {
-		h.client = frontierV1.NewFrontierClient(h.clientConn.Connection())
-		return nil
+	return &harvester{
+		ClientConn: serviceconnections.NewClientConn("Frontier", opts...),
 	}
 }
 
-func (h *harvester) Close() {
-	h.clientConn.Close()
+func (h *harvester) Connect() error {
+	if err := h.ClientConn.Connect(); err != nil {
+		return err
+	} else {
+		h.FrontierClient = frontierV1.NewFrontierClient(h.ClientConn.Connection())
+		return nil
+	}
 }
 
 func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
@@ -79,7 +76,7 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 	harvestCtx, cancel := context.WithCancel(spanCtx)
 	defer cancel()
 
-	stream, err := h.client.GetNextPage(harvestCtx)
+	stream, err := h.FrontierClient.GetNextPage(harvestCtx)
 	if err != nil {
 		return fmt.Errorf("failed to get the frontier GetNextPage client: %w", err)
 	}
@@ -143,7 +140,7 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 	metrics.ActiveBrowserSessions.Inc()
 	defer metrics.ActiveBrowserSessions.Dec()
 	metrics.PagesTotal.Inc()
-	renderResult, err := fetch(ctx, harvestSpec.QueuedUri, harvestSpec.CrawlConfig)
+	renderResult, err := fetch(spanCtx, harvestSpec.QueuedUri, harvestSpec.CrawlConfig)
 	if err != nil {
 		span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 		log.Errorf("Failed to fetch: %v", err)

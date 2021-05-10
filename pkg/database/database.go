@@ -20,20 +20,21 @@ import (
 	"context"
 	"fmt"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
-	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
 	"time"
 )
 
-// connection holds the connections for ContentWriter and Veidemann database
-type connection struct {
-	dbConnectOpts      r.ConnectOpts
-	dbSession          r.QueryExecutor
+var log = logrus.WithField("component", "rethinkdb")
+
+// RethinkDbConnection holds the database connection database
+type RethinkDbConnection struct {
+	connectOpts        r.ConnectOpts
+	session            r.QueryExecutor
 	maxRetries         int
 	waitTimeout        time.Duration
 	queryTimeout       time.Duration
 	maxOpenConnections int
-	logger             *log.Entry
 	batchSize          int
 }
 
@@ -42,18 +43,17 @@ type Options struct {
 	Password           string
 	Database           string
 	UseOpenTracing     bool
-	Host               string
-	Port               int
+	Address            string
 	QueryTimeout       time.Duration
 	MaxRetries         int
 	MaxOpenConnections int
 }
 
-// NewConnection creates a new connection object
-func NewConnection(opts Options) DbConnection {
-	return &connection{
-		dbConnectOpts: r.ConnectOpts{
-			Address:        fmt.Sprintf("%s:%d", opts.Host, opts.Port),
+// NewRethinkDbConnection creates a new RethinkDbConnection object
+func NewRethinkDbConnection(opts Options) *RethinkDbConnection {
+	return &RethinkDbConnection{
+		connectOpts: r.ConnectOpts{
+			Address:        opts.Address,
 			Username:       opts.Username,
 			Password:       opts.Password,
 			Database:       opts.Database,
@@ -67,30 +67,29 @@ func NewConnection(opts Options) DbConnection {
 		waitTimeout:  60 * time.Second,
 		queryTimeout: opts.QueryTimeout,
 		batchSize:    200,
-		logger:       log.WithField("component", "database"),
 	}
 }
 
 // Connect establishes connections
-func (c *connection) Connect() error {
+func (c *RethinkDbConnection) Connect() error {
 	var err error
-	// Set up database connection
-	c.dbSession, err = r.Connect(c.dbConnectOpts)
+	// Set up database RethinkDbConnection
+	c.session, err = r.Connect(c.connectOpts)
 	if err != nil {
-		return fmt.Errorf("failed to connect to RethinkDB at %s: %w", c.dbConnectOpts.Address, err)
+		return fmt.Errorf("failed to connect to RethinkDB at %s: %w", c.connectOpts.Address, err)
 	}
-
-	c.logger.Infof("Connected to RethinkDB at %s", c.dbConnectOpts.Address)
+	log.Infof("Connected to RethinkDB at %s", c.connectOpts.Address)
 	return nil
 }
 
-// Close closes the connection
-func (c *connection) Close() error {
-	c.logger.Infof("Closing database connection")
-	return c.dbSession.(*r.Session).Close()
+// Close closes the RethinkDbConnection
+func (c *RethinkDbConnection) Close() error {
+	log.Infof("Closing connection to RethinkDB")
+	return c.session.(*r.Session).Close()
 }
 
-func (c *connection) GetConfig(ctx context.Context, ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
+// GetConfigObject fetches a config.ConfigObject referenced by a config.ConfigRef
+func (c *RethinkDbConnection) GetConfigObject(ctx context.Context, ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
 	term := r.Table("config").Get(ref.Id)
 	res, err := c.execRead(ctx, "get-config-object", &term)
 	if err != nil {
@@ -105,7 +104,8 @@ func (c *connection) GetConfig(ctx context.Context, ref *configV1.ConfigRef) (*c
 	return &result, nil
 }
 
-func (c *connection) GetConfigsForSelector(ctx context.Context, kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
+// GetConfigsForSelector fetches a list of config.ConfigObject's matching config.Kind and config.Label
+func (c *RethinkDbConnection) GetConfigsForSelector(ctx context.Context, kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
 	term := r.Table("config").GetAllByIndex("label", r.Expr([]string{label.Key, label.Value})).
 		Filter(func(row r.Term) r.Term {
 			return row.Field("kind").Eq(kind.String())
@@ -133,24 +133,24 @@ func (c *connection) GetConfigsForSelector(ctx context.Context, kind configV1.Ki
 }
 
 // execRead executes the given read term with a timeout
-func (c *connection) execRead(ctx context.Context, name string, term *r.Term) (*r.Cursor, error) {
+func (c *RethinkDbConnection) execRead(ctx context.Context, name string, term *r.Term) (*r.Cursor, error) {
 	q := func(ctx context.Context) (*r.Cursor, error) {
 		runOpts := r.RunOpts{
 			Context: ctx,
 		}
-		return term.Run(c.dbSession, runOpts)
+		return term.Run(c.session, runOpts)
 	}
 	return c.execWithRetry(ctx, name, q)
 }
 
 // execWrite executes the given write term with a timeout
-func (c *connection) execWrite(ctx context.Context, name string, term *r.Term) error {
+func (c *RethinkDbConnection) execWrite(ctx context.Context, name string, term *r.Term) error {
 	q := func(ctx context.Context) (*r.Cursor, error) {
 		runOpts := r.RunOpts{
 			Context:    ctx,
 			Durability: "soft",
 		}
-		_, err := (*term).RunWrite(c.dbSession, runOpts)
+		_, err := (*term).RunWrite(c.session, runOpts)
 		return nil, err
 	}
 	_, err := c.execWithRetry(ctx, name, q)
@@ -158,9 +158,9 @@ func (c *connection) execWrite(ctx context.Context, name string, term *r.Term) e
 }
 
 // execWithRetry executes given query function repeatedly until successful or max retry limit is reached
-func (c *connection) execWithRetry(ctx context.Context, name string, q func(ctx context.Context) (*r.Cursor, error)) (cursor *r.Cursor, err error) {
+func (c *RethinkDbConnection) execWithRetry(ctx context.Context, name string, q func(ctx context.Context) (*r.Cursor, error)) (cursor *r.Cursor, err error) {
 	attempts := 0
-	logger := c.logger.WithField("operation", name)
+	log := log.WithField("operation", name)
 out:
 	for {
 		attempts++
@@ -168,17 +168,17 @@ out:
 		if err == nil {
 			return
 		}
-		logger.WithError(err).WithField("retries", attempts-1).Warn()
+		log.WithError(err).WithField("retries", attempts-1).Warn()
 		switch err {
 		case r.ErrQueryTimeout:
 			err := c.wait()
 			if err != nil {
-				logger.WithError(err).Warn()
+				log.WithError(err).Warn()
 			}
 		case r.ErrConnectionClosed:
 			err := c.Connect()
 			if err != nil {
-				logger.WithError(err).Warn()
+				log.WithError(err).Warn()
 			}
 		default:
 			break out
@@ -191,17 +191,17 @@ out:
 }
 
 // exec executes the given query with a timeout
-func (c *connection) exec(ctx context.Context, q func(ctx context.Context) (*r.Cursor, error)) (*r.Cursor, error) {
+func (c *RethinkDbConnection) exec(ctx context.Context, q func(ctx context.Context) (*r.Cursor, error)) (*r.Cursor, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
 	return q(ctx)
 }
 
 // wait waits for database to be fully up date and ready for read/write
-func (c *connection) wait() error {
+func (c *RethinkDbConnection) wait() error {
 	waitOpts := r.WaitOpts{
 		Timeout: c.waitTimeout,
 	}
-	_, err := r.DB(c.dbConnectOpts.Database).Wait(waitOpts).Run(c.dbSession)
+	_, err := r.DB(c.connectOpts.Database).Wait(waitOpts).Run(c.session)
 	return err
 }

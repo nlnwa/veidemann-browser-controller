@@ -21,14 +21,13 @@ import (
 	gerr "errors"
 	"fmt"
 	browsercontrollerV1 "github.com/nlnwa/veidemann-api/go/browsercontroller/v1"
-	log2 "github.com/nlnwa/veidemann-api/go/log/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/errors"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/logwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/requests"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/robotsevaluator"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/url"
-	"github.com/nlnwa/veidemann-log-service/pkg/logclient"
 	"github.com/opentracing/opentracing-go"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -49,11 +48,11 @@ type ApiServer struct {
 	addr            string
 	grpcServer      *grpc.Server
 	robotsEvaluator robotsevaluator.RobotsEvaluator
-	logWriter       *logclient.LogClient
+	logWriter       logwriter.LogWriter
 }
 
 // NewApiServer returns a new instance of ApiServer listening on the given port
-func NewApiServer(listenInterface string, listenPort int, sessions *session.Registry, robotsEvaluator robotsevaluator.RobotsEvaluator, logWriter *logclient.LogClient) *ApiServer {
+func NewApiServer(listenInterface string, listenPort int, sessions *session.Registry, robotsEvaluator robotsevaluator.RobotsEvaluator, logWriter logwriter.LogWriter) *ApiServer {
 	a := &ApiServer{
 		sessions:        sessions,
 		addr:            fmt.Sprintf("%s:%d", listenInterface, listenPort),
@@ -192,7 +191,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				v.New.Uri,
 				sess.RequestedUrl.JobExecutionId,
 				sess.RequestedUrl.ExecutionId,
-				sess.PolitenessConfig.GetPolitenessConfig().RobotsPolicy)
+				sess.PolitenessConfig.GetPolitenessConfig().GetRobotsPolicy())
 
 			robotsRequest := &robotsevaluatorV1.IsAllowedRequest{
 				JobExecutionId: sess.RequestedUrl.JobExecutionId,
@@ -305,8 +304,8 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 			}
 			if req == nil {
 				if sess.Id == 0 {
-					if !v.Completed.Cached && v.Completed.CrawlLog != nil && v.Completed.CrawlLog.WarcId != "" {
-						if err := a.logWriter.WriteCrawlLogs(stream.Context(), []*log2.CrawlLog{v.Completed.CrawlLog}); err != nil {
+					if !v.Completed.Cached && v.Completed.CrawlLog.GetWarcId() != "" {
+						if err := a.logWriter.WriteCrawlLog(stream.Context(), v.Completed.CrawlLog); err != nil {
 							log.Errorf("Failed writing crawlLog for direct session: %v", err)
 						}
 					}

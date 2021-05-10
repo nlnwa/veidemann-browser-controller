@@ -40,7 +40,7 @@ func (opts *connectionOptions) Addr() string {
 	return opts.host + ":" + strconv.Itoa(opts.port)
 }
 
-// ConnectionOption configures how to connect to a service.
+// ConnectionOption configures how to connectService to a service.
 type ConnectionOption interface {
 	apply(*connectionOptions)
 }
@@ -85,7 +85,7 @@ func (opts *connectionOptions) connectService() (*grpc.ClientConn, error) {
 	clientConn, err := grpc.DialContext(dialCtx, opts.Addr(), dialOpts...)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("failed to connect to %s at %s within %s: %s", opts.serviceName, opts.Addr(),
+			return nil, fmt.Errorf("failed to connectService to %s at %s within %s: %s", opts.serviceName, opts.Addr(),
 				opts.connectTimeout, err)
 		}
 		return nil, err

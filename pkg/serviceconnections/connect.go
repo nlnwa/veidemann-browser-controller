@@ -17,9 +17,14 @@
 package serviceconnections
 
 import (
-	log "github.com/sirupsen/logrus"
+	"fmt"
 	"google.golang.org/grpc"
 )
+
+type Connection interface {
+	Connect() error
+	Close() error
+}
 
 type ClientConn struct {
 	conn *grpc.ClientConn
@@ -32,15 +37,13 @@ func (c *ClientConn) Connect() error {
 	return err
 }
 
-func (c *ClientConn) Close() {
+func (c *ClientConn) Close() error {
 	if c.conn != nil {
-		err := c.conn.Close()
-		if err == nil {
-			log.Infof("Disconnected from %v", c.opts.serviceName)
-		} else {
-			log.WithError(err).Warnf("Error while disconnecting from %v", c.opts.serviceName)
+		if err := c.conn.Close(); err == nil {
+			return fmt.Errorf("%s: %w", c.opts.serviceName, err)
 		}
 	}
+	return nil
 }
 
 func (c *ClientConn) Connection() *grpc.ClientConn {
@@ -52,7 +55,6 @@ func NewClientConn(serviceName string, opts ...ConnectionOption) *ClientConn {
 	for _, opt := range opts {
 		opt.apply(&o)
 	}
-
 	return &ClientConn{
 		opts: &o,
 	}

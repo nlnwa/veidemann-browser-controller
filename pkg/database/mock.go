@@ -19,45 +19,40 @@ package database
 import (
 	"context"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
-	log "github.com/sirupsen/logrus"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
-	"os"
 	"time"
 )
 
 type MockConnection struct {
-	*connection
+	*RethinkDbConnection
 }
 
-// NewMockConnection creates a new mocked connection object
-func NewMockConnection() DbConnection {
+// NewMockConnection creates a new mocked RethinkDbConnection object
+func NewMockConnection() *MockConnection {
 	return &MockConnection{
-		connection: &connection{
-			dbConnectOpts: r.ConnectOpts{
+		RethinkDbConnection: &RethinkDbConnection{
+			connectOpts: r.ConnectOpts{
 				NumRetries: 10,
 			},
-			dbSession:    r.NewMock(),
-			batchSize: 200,
+			session:      r.NewMock(),
+			batchSize:    200,
 			queryTimeout: 5 * time.Second,
-			logger:       log.WithField("component", "mock connection"),
 		},
 	}
 }
 
 func (c *MockConnection) Close() error {
-	_ = os.Remove("crawl.log")
-	_ = os.Remove("page.log")
 	return nil
 }
 
 func (c *MockConnection) GetMock() *r.Mock {
-	return c.dbSession.(*r.Mock)
+	return c.session.(*r.Mock)
 }
 
-func (c *MockConnection) GetConfig(ctx context.Context, ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
-	return c.connection.GetConfig(ctx, ref)
+func (c *MockConnection) GetConfigObject(ctx context.Context, ref *configV1.ConfigRef) (*configV1.ConfigObject, error) {
+	return c.RethinkDbConnection.GetConfigObject(ctx, ref)
 }
 
 func (c *MockConnection) GetConfigsForSelector(ctx context.Context, kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
-	return c.connection.GetConfigsForSelector(ctx, kind, label)
+	return c.RethinkDbConnection.GetConfigsForSelector(ctx, kind, label)
 }
