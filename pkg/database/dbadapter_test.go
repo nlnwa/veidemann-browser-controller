@@ -15,10 +15,11 @@ var (
 )
 
 type dbConnMock struct {
+	*MockConnection
 	i int
 }
 
-func (d *dbConnMock) GetConfig(_ context.Context, _ *configV1.ConfigRef) (*configV1.ConfigObject, error) {
+func (d *dbConnMock) GetConfigObject(_ context.Context, _ *configV1.ConfigRef) (*configV1.ConfigObject, error) {
 	d.i++
 	switch d.i {
 	case 1:
@@ -30,19 +31,7 @@ func (d *dbConnMock) GetConfig(_ context.Context, _ *configV1.ConfigRef) (*confi
 	}
 }
 
-func (d *dbConnMock) Connect() error {
-	panic("implement me")
-}
-
-func (d *dbConnMock) Close() error {
-	panic("implement me")
-}
-
-func (d *dbConnMock) GetConfigsForSelector(_ context.Context, _ configV1.Kind, _ *configV1.Label) ([]*configV1.ConfigObject, error) {
-	panic("implement me")
-}
-
-func Test_configCache_Get(t *testing.T) {
+func TestConfigCacheGet(t *testing.T) {
 	tests := []struct {
 		name       string
 		sleep      time.Duration
@@ -56,7 +45,7 @@ func Test_configCache_Get(t *testing.T) {
 	for _, tt := range tests {
 		//i := 0
 		t.Run(tt.name, func(t *testing.T) {
-			cc := NewDbAdapter(&dbConnMock{i: 0}, 100*time.Millisecond)
+			cc := NewConfigCache(&dbConnMock{}, 100*time.Millisecond)
 			ref := &configV1.ConfigRef{Kind: configV1.Kind_crawlJob, Id: "1"}
 
 			gotFirst, err := cc.GetConfigObject(context.Background(), ref)

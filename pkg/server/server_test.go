@@ -1,3 +1,5 @@
+// +build slow
+
 /*
  * Copyright 2020 National Library of Norway.
  *
@@ -20,25 +22,27 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/docker/go-connections/nat"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/logwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/testutil"
-	"github.com/nlnwa/veidemann-log-service/pkg/logclient"
 	"github.com/nlnwa/veidemann-recorderproxy/recorderproxy"
-	"github.com/nlnwa/veidemann-recorderproxy/serviceconnections"
+	proxyServiceConnections "github.com/nlnwa/veidemann-recorderproxy/serviceconnections"
 	proxyTestUtil "github.com/nlnwa/veidemann-recorderproxy/testutil"
-	"github.com/ory/dockertest"
+	logServiceTestUtil "github.com/nlnwa/veidemann-log-service/pkg/testutil"
 	log "github.com/sirupsen/logrus"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
 	"io"
 	"net"
-	"net/http"
 	"os"
-	"strconv"
 	"testing"
 	"time"
 )
@@ -50,15 +54,19 @@ var localhost = GetOutboundIP().String()
 func TestMain(m *testing.M) {
 	log.SetLevel(log.WarnLevel)
 
-	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
-	pool, err := dockertest.NewPool("")
+	// setup browser
+	ctx, cancelBrowser := context.WithCancel(context.Background())
+	defer cancelBrowser()
+	browserHost, browserPort, err := setupBrowser(ctx)
 	if err != nil {
-		log.Fatalf("Could not connect to docker: %s", err)
+		panic(err)
 	}
-	browserContainer, browserPort := setupBrowser(pool)
 
+	// setup database mock
 	dbMock := setupDbMock()
-	dbAdapter := database.NewDbAdapter(dbMock, time.Minute)
+	dbAdapter := database.NewConfigCache(dbMock.RethinkDbConnection, time.Minute)
+
+	// setup screenshot writer mock
 	screenShotWriter := &testutil.ScreenshotWriterMock{
 		WriteFunc: func(data []byte, metadata screenshotwriter.Metadata) error {
 			b := bytes.NewBuffer(data)
@@ -75,44 +83,54 @@ func TestMain(m *testing.M) {
 			}
 			return nil
 		},
-		CloseFunc: func() {
-			_ = os.Remove("screenshot.png")
+		CloseFunc: func() error {
+			return os.Remove("screenshot.png")
 		},
 	}
-	logServiceMock := testutil.NewLogServiceMock(5002)
 
-	logWriter := logclient.New(
-		logclient.WithPort(5002),
+	// setup log service mock
+	logServiceMock := logServiceTestUtil.NewLogServiceMock(5002)
+
+	// setup writer client
+	logWriter := logwriter.New(
+		serviceconnections.WithPort(5002),
 	)
 	if err := logWriter.Connect(); err != nil {
 		log.Fatal(err)
 		return
 	}
 
+	// setup sessions
 	sessions = session.NewRegistry(
 		2,
+		session.WithBrowserHost(browserHost),
 		session.WithBrowserPort(browserPort),
 		session.WithProxyHost(localhost),
 		session.WithProxyPort(6666),
-		session.WithDbAdapter(dbAdapter),
+		session.WithConfigCache(dbAdapter),
 		session.WithScreenshotWriter(screenShotWriter),
 		session.WithLogWriter(logWriter),
 	)
 
+	// setup robots evaluator mock
 	robotsEvaluator := &testutil.RobotsEvaluatorMock{IsAllowedFunc: func(_ *robotsevaluatorV1.IsAllowedRequest) bool {
 		return true
 	}}
+
+	// setup api server
 	apiServer := NewApiServer("", 7777, sessions, robotsEvaluator, logWriter)
 	go func() {
 		_ = apiServer.Start()
 	}()
 
-	// Setup recorder proxy
-	opt := proxyTestUtil.WithExternalBrowserController(serviceconnections.NewConnectionOptions("BrowserController",
-		serviceconnections.WithHost("localhost"),
-		serviceconnections.WithPort("7777"),
-		serviceconnections.WithConnectTimeout(10*time.Second),
-	))
+	// setup recorder proxy
+	opt := proxyTestUtil.WithExternalBrowserController(
+		proxyServiceConnections.NewConnectionOptions("BrowserController",
+			proxyServiceConnections.WithHost("localhost"),
+			proxyServiceConnections.WithPort("7777"),
+			proxyServiceConnections.WithConnectTimeout(10*time.Second),
+		),
+	)
 	grpcServices := proxyTestUtil.NewGrpcServiceMock(opt)
 	recorderProxy0 := localRecorderProxy(0, grpcServices.ClientConn, "")
 	recorderProxy1 := localRecorderProxy(1, grpcServices.ClientConn, "")
@@ -123,18 +141,16 @@ func TestMain(m *testing.M) {
 
 	// Clean up
 	sessions.CloseWait(1 * time.Minute)
-	if err := pool.Purge(browserContainer); err != nil {
-		log.Warnf("Could not purge browserContainer: %s", err)
-	}
 	apiServer.Close()
 	grpcServices.Close()
 	recorderProxy0.Close()
 	recorderProxy1.Close()
 	recorderProxy2.Close()
-	screenShotWriter.Close()
+	_ = screenShotWriter.Close()
 	_ = dbMock.Close()
 	_ = logWriter.Close()
 	logServiceMock.Close()
+	cancelBrowser()
 
 	os.Exit(code)
 }
@@ -187,7 +203,7 @@ func TestSession_Fetch(t *testing.T) {
 }
 
 func setupDbMock() *database.MockConnection {
-	dbConn := database.NewMockConnection().(*database.MockConnection)
+	dbConn := database.NewMockConnection()
 	dbConn.GetMock().On(r.Table("config").Get("browserConfig1")).Return(
 		map[string]interface{}{
 			"id":   "browserConfig1",
@@ -267,7 +283,7 @@ func setupDbMock() *database.MockConnection {
 }
 
 // localRecorderProxy creates a new recorderproxy which uses internal transport
-func localRecorderProxy(id int, conn *serviceconnections.Connections, nextProxyAddr string) (proxy *recorderproxy.RecorderProxy) {
+func localRecorderProxy(id int, conn *proxyServiceConnections.Connections, nextProxyAddr string) (proxy *recorderproxy.RecorderProxy) {
 	proxy = recorderproxy.NewRecorderProxy(id, "0.0.0.0", 6666, conn, 5*time.Second, nextProxyAddr)
 	proxy.Start()
 	return
@@ -287,29 +303,27 @@ func GetOutboundIP() net.IP {
 	return localAddr.IP
 }
 
-func setupBrowser(pool *dockertest.Pool) (container *dockertest.Resource, port int) {
-	var err error
-	// pulls an image, creates a container based on it and runs it
-	//container, err = pool.Run("browserless/chrome", "1.32.0-puppeteer-2.1.1", []string{"WORKSPACE_DIR", "/dev/null"})//, "DISABLE_AUTO_SET_DOWNLOAD_BEHAVIOR", "true"})
-	container, err = pool.Run("browserless/chrome", "1.33.0-puppeteer-3.0.0", []string{})
+func setupBrowser(ctx context.Context) (host string, port int, err error) {
+	browserless, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "browserless/chrome:1.33.0-puppeteer-3.0.0",
+			ExposedPorts: []string{"3000/tcp"},
+			WaitingFor: wait.ForListeningPort("3000/tcp"),
+		},
+		Started: true,
+	})
 	if err != nil {
-		log.Fatalf("Could not start browserContainer: %s", err)
+		return
 	}
-
-	port, err = strconv.Atoi(container.GetPort("3000/tcp"))
+	host, err = browserless.Host(ctx)
 	if err != nil {
-		log.Fatalf("Could not get port for browserContainer: %s", err)
+		return
 	}
-
-	// exponential backoff-retry, because the application in the container might not be ready to accept connections yet
-	if err := pool.Retry(func() error {
-		_, err := http.Head("http://localhost:" + container.GetPort("3000/tcp"))
-		if err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
-		log.Fatalf("Could not connect to docker: %s", err)
+	var browserPort nat.Port
+	browserPort, err = browserless.MappedPort(ctx, "3000/tcp")
+	if err != nil {
+		return
 	}
+	port = browserPort.Int()
 	return
 }

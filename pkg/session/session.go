@@ -31,16 +31,17 @@ import (
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/device"
+	"github.com/google/uuid"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	logV1 "github.com/nlnwa/veidemann-api/go/log/v1"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/errors"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/harvester"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/logwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/requests"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/syncx"
-	"github.com/nlnwa/veidemann-log-service/pkg/logclient"
 	"github.com/nlnwa/whatwg-url/url"
 	"github.com/opentracing/opentracing-go"
 	log "github.com/sirupsen/logrus"
@@ -66,7 +67,7 @@ type Session struct {
 	browserWsEndpoint string
 	workspaceEndpoint string
 	UserAgent         string
-	BrowserVersion    string
+	browserVersion    string
 	Requests          requests.RequestRegistry
 	currentLoading    int32
 	frameWg          *syncx.WaitGroup
@@ -77,9 +78,9 @@ type Session struct {
 	CrawlConfig      *configV1.CrawlConfig
 	browserConfig    *configV1.BrowserConfig
 	PolitenessConfig *configV1.ConfigObject
-	DbAdapter        *database.DbAdapter
+	configCache      database.ConfigCache
 	screenShotWriter screenshotwriter.ScreenshotWriter
-	logClient        *logclient.LogClient
+	logWriter        logwriter.LogWriter
 	scripts          *sessionScripts
 }
 
@@ -191,7 +192,8 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 		}
 	}()
 
-	span, ctx := opentracing.StartSpanFromContext(ctx, "session",
+	var span opentracing.Span
+	span, ctx = opentracing.StartSpanFromContext(ctx, "session",
 		opentracing.Tag{Key: "session.id", Value: sess.Id})
 	defer span.Finish()
 
@@ -199,13 +201,13 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 	sess.RequestedUrl = QUri
 	sess.CrawlConfig = crawlConf.GetCrawlConfig()
 
-	bConf, err := sess.DbAdapter.GetConfigObject(ctx, sess.CrawlConfig.BrowserConfigRef)
+	bConf, err := sess.configCache.GetConfigObject(ctx, sess.CrawlConfig.BrowserConfigRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get browser config: %v", err)
 	}
 	sess.browserConfig = bConf.GetBrowserConfig()
 
-	sess.PolitenessConfig, err = sess.DbAdapter.GetConfigObject(ctx, sess.CrawlConfig.PolitenessRef)
+	sess.PolitenessConfig, err = sess.configCache.GetConfigObject(ctx, sess.CrawlConfig.PolitenessRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get politeness config: %v", err)
 	}
@@ -232,7 +234,7 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 	var userAgent string
 	if err := chromedp.Run(sess.ctx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			_, sess.BrowserVersion, _, userAgent, _, err = browser.GetVersion().Do(ctx)
+			_, sess.browserVersion, _, userAgent, _, err = browser.GetVersion().Do(ctx)
 			return err
 		}),
 	); err != nil {
@@ -350,7 +352,7 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 	var crawlLogs []*logV1.CrawlLog
 
 	sess.Requests.Walk(func(r *requests.Request) {
-		if r.CrawlLog != nil && r.CrawlLog.WarcId != "" {
+		if r.CrawlLog.GetWarcId() != "" {
 			crawlLogs = append(crawlLogs, r.CrawlLog)
 			crawlLogCount++
 			bytesDownloaded += r.CrawlLog.Size
@@ -377,15 +379,19 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 			log.Warnf("No crawllog for resource. Skipping %v %v %v. Got new: %v, Got complete %v", r.RequestId, r.Method, r.Url, r.GotNew, r.GotComplete)
 		}
 	})
-	if err := sess.logClient.WriteCrawlLogs(ctx, crawlLogs); err != nil {
+	if err := sess.logWriter.WriteCrawlLogs(ctx, crawlLogs); err != nil {
 		log.Errorf("Error writing crawlLogs: %v", err)
 	} else {
 		log.Debugf("%d crawlLogs written", len(crawlLogs))
 	}
 
 	if sess.Requests.InitialRequest() != nil && sess.Requests.InitialRequest().CrawlLog != nil {
+		warcId := sess.Requests.InitialRequest().CrawlLog.WarcId
+		if warcId == "" {
+			warcId = uuid.New().String()
+		}
 		pageLog := &logV1.PageLog{
-			WarcId:              sess.Requests.InitialRequest().CrawlLog.WarcId,
+			WarcId:              warcId,
 			Uri:                 sess.RequestedUrl.Uri,
 			ExecutionId:         sess.RequestedUrl.ExecutionId,
 			Referrer:            sess.Requests.InitialRequest().Referrer,
@@ -395,7 +401,7 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 			Resource:            resources,
 			Outlink:             outlinks,
 		}
-		if err := sess.logClient.WritePageLog(ctx, pageLog); err != nil {
+		if err := sess.logWriter.WritePageLog(ctx, pageLog); err != nil {
 			log.Errorf("Error writing pageLog: %v", err)
 		} else {
 			log.WithField("uri", sess.RequestedUrl.Uri).Debugf("Pagelog written")
@@ -531,7 +537,7 @@ func (sess *Session) saveScreenshot() {
 		CrawlConfig:    sess.CrawlConfig,
 		CrawlLog:       sess.Requests.RootRequest().CrawlLog,
 		BrowserConfig:  sess.browserConfig,
-		BrowserVersion: sess.BrowserVersion,
+		BrowserVersion: sess.browserVersion,
 	}
 	if err = sess.screenShotWriter.Write(ctx, data, metadata); err != nil {
 		log.Errorf("Error writing screenshot: %v", err)

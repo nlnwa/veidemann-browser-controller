@@ -17,6 +17,7 @@
 package tracing
 
 import (
+	"fmt"
 	"github.com/opentracing/opentracing-go"
 	"github.com/uber/jaeger-client-go/config"
 	"github.com/uber/jaeger-client-go/log"
@@ -24,20 +25,14 @@ import (
 )
 
 // Init returns an instance of Jaeger Tracer that samples 100% of traces and logs all spans to stdout.
-func Init(service string) (opentracing.Tracer, io.Closer) {
+func Init(service string) (opentracing.Tracer, io.Closer, error) {
 	cfg, err := config.FromEnv()
 	if err != nil {
-		log.StdLogger.Infof("ERROR: cannot init Jaeger from environment: %v", err)
-		return nil, nil
+		return nil, nil, fmt.Errorf("failed to initialize jaeger from environment: %w", err)
 	}
 	if cfg.ServiceName == "" {
 		cfg.ServiceName = service
 	}
 
-	tracer, closer, err := cfg.NewTracer(config.Logger(log.StdLogger))
-	if err != nil {
-		log.StdLogger.Infof("ERROR: cannot init Jaeger: %v", err)
-		return nil, nil
-	}
-	return tracer, closer
+	return cfg.NewTracer(config.Logger(log.StdLogger))
 }

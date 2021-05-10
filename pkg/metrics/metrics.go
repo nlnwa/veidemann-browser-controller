@@ -18,31 +18,33 @@ package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/common/version"
 )
 
 var (
-	ActiveBrowserSessions = prometheus.NewGauge(prometheus.GaugeOpts{
+	ActiveBrowserSessions = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: metricsNs,
 		Subsystem: metricsSubsystem,
 		Name:      "active_browser_sessions",
 		Help:      "Active browser sessions",
 	})
 
-	BrowserSessions = prometheus.NewGauge(prometheus.GaugeOpts{
+	BrowserSessions = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: metricsNs,
 		Subsystem: metricsSubsystem,
 		Name:      "browser_sessions",
 		Help:      "Available browser sessions",
 	})
 
-	PagesTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	PagesTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: metricsNs,
 		Subsystem: metricsSubsystem,
 		Name:      "pages_total",
 		Help:      "Total pages processed",
 	})
 
-	PagesFailedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	PagesFailedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNs,
 		Subsystem: metricsSubsystem,
 		Name:      "pages_failed_total",
@@ -51,7 +53,7 @@ var (
 		[]string{"code"},
 	)
 
-	PageFetchSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+	PageFetchSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
 		Namespace: metricsNs,
 		Subsystem: metricsSubsystem,
 		Name:      "pages_fetch_seconds",
@@ -59,6 +61,10 @@ var (
 		Buckets:   []float64{.005, .01, .025, .05, .075, .1, .25, .5, .75, 1, 2.5, 5, 7.5, 10, 20, 30, 40, 50, 60, 120, 180, 240},
 	})
 )
+
+func init() {
+	prometheus.MustRegister(version.NewCollector("veidemann_browser_controller"))
+}
 
 const (
 	metricsNs        = "veidemann"

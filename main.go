@@ -17,18 +17,19 @@
 package main
 
 import (
+	"fmt"
 	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/controller"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/harvester"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/logger"
+	"github.com/nlnwa/veidemann-browser-controller/pkg/logwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/metrics"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/robotsevaluator"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
 	"github.com/nlnwa/veidemann-browser-controller/pkg/tracing"
-	logwriter "github.com/nlnwa/veidemann-log-service/pkg/logclient"
 	"github.com/opentracing/opentracing-go"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
@@ -105,9 +106,14 @@ func main() {
 		viper.GetString("log-formatter"),
 		viper.GetBool("log-method"),
 	); err != nil {
-		log.Errorf("Could not initialize logs: %v", err)
-		return
+		log.Fatalf("Could not initialize logging: %v", err)
 	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Fatal(r)
+		}
+	}()
 
 	log.Infof("Browser Controller starting...")
 	defer func() {
@@ -115,36 +121,35 @@ func main() {
 	}()
 
 	// setup tracing
-	tracer, closer := tracing.Init("Browser Controller")
-	if tracer != nil {
-		opentracing.SetGlobalTracer(tracer)
+	if tracer, closer, err := tracing.Init("Browser Controller"); err != nil {
+		log.Warningf("Failed to initialize tracing: %v", err)
+	} else {
 		defer closer.Close()
+		opentracing.SetGlobalTracer(tracer)
 	}
-
-	metricsServer := metrics.NewServer(viper.GetString("metrics-interface"), viper.GetInt("metrics-port"), viper.GetString("metrics-path"))
 
 	connectTimeout := viper.GetDuration("connect-timeout")
 
-	screenshotwriter := screenshotwriter.New(
+	screenshotWriter := screenshotwriter.New(
 		serviceconnections.WithConnectTimeout(connectTimeout),
 		serviceconnections.WithHost(viper.GetString("content-writer-host")),
 		serviceconnections.WithPort(viper.GetInt("content-writer-port")),
 	)
-	if err := screenshotwriter.Connect(); err != nil {
-		log.WithError(err).Error()
-		return
+	if err := screenshotWriter.Connect(); err != nil {
+		panic(err)
 	}
-	defer screenshotwriter.Close()
+	defer screenshotWriter.Close()
 
 	harvester := harvester.New(
 		serviceconnections.WithConnectTimeout(connectTimeout),
 		serviceconnections.WithHost(viper.GetString("frontier-host")),
 		serviceconnections.WithPort(viper.GetInt("frontier-port")),
-		serviceconnections.WithDialOptions(grpc.WithStreamInterceptor(otgrpc.OpenTracingStreamClientInterceptor(tracer))),
+		serviceconnections.WithDialOptions(
+			grpc.WithStreamInterceptor(otgrpc.OpenTracingStreamClientInterceptor(opentracing.GlobalTracer())),
+		),
 	)
 	if err := harvester.Connect(); err != nil {
-		log.WithError(err).Error()
-		return
+		panic(err)
 	}
 	defer harvester.Close()
 
@@ -154,26 +159,23 @@ func main() {
 		serviceconnections.WithPort(viper.GetInt("robots-evaluator-port")),
 	)
 	if err := robotsEvaluator.Connect(); err != nil {
-		log.WithError(err).Error()
-		return
+		panic(err)
 	}
 	defer robotsEvaluator.Close()
 
 	logWriter := logwriter.New(
-		logwriter.WithConnectTimeout(connectTimeout),
-		logwriter.WithHost(viper.GetString("log-service-host")),
-		logwriter.WithPort(viper.GetInt("log-service-port")),
+		serviceconnections.WithConnectTimeout(connectTimeout),
+		serviceconnections.WithHost(viper.GetString("log-service-host")),
+		serviceconnections.WithPort(viper.GetInt("log-service-port")),
 	)
 	if err := logWriter.Connect(); err != nil {
-		log.WithError(err).Error()
-		return
+		panic(err)
 	}
 	defer logWriter.Close()
 
-	db := database.NewConnection(
+	db := database.NewRethinkDbConnection(
 		database.Options{
-			Host:               viper.GetString("db-host"),
-			Port:               viper.GetInt("db-port"),
+			Address:            fmt.Sprintf("%s:%d", viper.GetString("db-host"), viper.GetInt("db-port")),
 			Username:           viper.GetString("db-user"),
 			Password:           viper.GetString("db-password"),
 			Database:           viper.GetString("db-name"),
@@ -184,12 +186,11 @@ func main() {
 		},
 	)
 	if err := db.Connect(); err != nil {
-		log.WithError(err).Error()
-		return
+		panic(err)
 	}
 	defer db.Close()
 
-	configCache := database.NewDbAdapter(db, viper.GetDuration("db-cache-ttl"))
+	configCache := database.NewConfigCache(db, viper.GetDuration("db-cache-ttl"))
 
 	browserController := controller.New(
 		controller.WithListenInterface(viper.GetString("interface")),
@@ -197,38 +198,36 @@ func main() {
 		controller.WithMaxConcurrentSessions(viper.GetInt("proxy-count")),
 		controller.WithHarvester(harvester),
 		controller.WithRobotsEvaluator(robotsEvaluator),
+		controller.WithLogWriter(logWriter),
 		controller.WithSessionOptions(
 			session.WithLogWriter(logWriter),
-			session.WithScreenshotWriter(screenshotwriter),
+			session.WithScreenshotWriter(screenshotWriter),
 			session.WithBrowserHost(viper.GetString("browser-host")),
 			session.WithBrowserPort(viper.GetInt("browser-port")),
 			session.WithProxyHost(viper.GetString("proxy-host")),
 			session.WithProxyPort(viper.GetInt("proxy-port")),
-			session.WithDbAdapter(configCache),
+			session.WithConfigCache(configCache),
 		),
 	)
 
-	errc := make(chan error, 1)
-
-	go func() { errc <- metricsServer.Start() }()
+	metricsServer := metrics.NewServer(viper.GetString("metrics-interface"), viper.GetInt("metrics-port"), viper.GetString("metrics-path"))
+	go func() {
+		if err := metricsServer.Start(); err != nil {
+			log.WithError(err).Error("Metrics server failed")
+			browserController.Shutdown()
+		}
+	}()
 	defer metricsServer.Close()
 
 	go func() {
 		signals := make(chan os.Signal)
 		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-
-		select {
-		case err := <-errc:
-			log.WithError(err).Error("Metrics server failed")
-			browserController.Shutdown()
-		case sig := <-signals:
-			log.Debugf("Received signal: %s", sig)
-			browserController.Shutdown()
-		}
+		sig := <-signals
+		log.WithField("signal", sig).Debugf("Received signal")
+		browserController.Shutdown()
 	}()
 
-	err := browserController.Run()
-	if err != nil {
-		log.WithError(err).Error()
+	if err := browserController.Run(); err != nil {
+		panic(err)
 	}
 }

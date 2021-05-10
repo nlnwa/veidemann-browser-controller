@@ -27,12 +27,17 @@ import (
 
 type BrowserController struct {
 	opts   browserControllerOptions
+	ctx    context.Context
 	cancel func()
 }
 
 func New(opts ...BrowserControllerOption) *BrowserController {
+	ctx, cancel := context.WithCancel(context.Background())
+
 	bc := &BrowserController{
-		opts: defaultBrowserControllerOptions(),
+		opts:   defaultBrowserControllerOptions(),
+		cancel: cancel,
+		ctx:    ctx,
 	}
 	for _, opt := range opts {
 		opt.apply(&bc.opts)
@@ -40,53 +45,41 @@ func New(opts ...BrowserControllerOption) *BrowserController {
 	return bc
 }
 
-func (bc *BrowserController) Run() error {
-	var ctx context.Context
-	ctx, bc.cancel = context.WithCancel(context.Background())
-
+func (bc *BrowserController) Run() (err error) {
 	sessions := session.NewRegistry(
 		bc.opts.maxSessions,
 		bc.opts.sessionOpts...,
 	)
 
-	apiServer := server.NewApiServer(bc.opts.listenInterface, bc.opts.listenPort, sessions, bc.opts.robotsEvaluator, bc.opts.logClient)
+	apiServer := server.NewApiServer(bc.opts.listenInterface, bc.opts.listenPort, sessions, bc.opts.robotsEvaluator, bc.opts.logWriter)
 	go func() {
-		err := apiServer.Start()
+		err = apiServer.Start()
 		if err != nil {
-			log.WithError(err).Error("Api server failed")
+			err = fmt.Errorf("API server failed: %w", err)
 			bc.cancel()
 		}
 	}()
-
 	defer apiServer.Close()
+
 	defer sessions.CloseWait(bc.opts.closeTimeout)
 
-	// give apiServer a chance to start
+	// give api server time to start
 	time.Sleep(time.Millisecond)
 
 	log.Infof("Browser Controller started")
-
 	for {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-bc.ctx.Done():
+			return
 		default:
-			sess, err := sessions.GetNextAvailable(ctx)
+			sess, err := sessions.GetNextAvailable(bc.ctx)
 			if err != nil {
-				if err == context.Canceled {
-					break
-				}
 				return fmt.Errorf("failed to get session: %w", err)
 			}
 			go func() {
-				err := bc.opts.harvester.Harvest(ctx, sess.Fetch)
-				if err != nil {
-					if err == context.Canceled {
-						log.Debugf("Harvest session #%v canceled", sess.Id)
-					} else {
-						log.Warnf("Harvest completed with error: %v", err)
-					}
-					time.Sleep(time.Second)
+				if err := bc.opts.harvester.Harvest(bc.ctx, sess.Fetch); err != nil {
+					log.WithError(err).WithField("session", sess.Id).Warning("Harvest error")
+					time.Sleep(time.Second) // delay release of session after error
 				}
 				if sess != nil {
 					sessions.Release(sess)

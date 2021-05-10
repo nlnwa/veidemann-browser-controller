@@ -26,7 +26,7 @@ type ScreenshotWriterMock struct {
 	// optional function to call at connect time
 	ConnectFunc func() error
 	// optional function to call when RobotsEvaluator is closing
-	CloseFunc func()
+	CloseFunc func() error
 	// optional function to call when Write is called on ScreenshotWriter. Write will always return nil if this
 	// is not set
 	WriteFunc func(data []byte, metadata screenshotwriter.Metadata) error
@@ -39,10 +39,11 @@ func (s *ScreenshotWriterMock) Connect() error {
 	return nil
 }
 
-func (s *ScreenshotWriterMock) Close() {
+func (s *ScreenshotWriterMock) Close() error {
 	if s.CloseFunc != nil {
-		s.CloseFunc()
+		return s.CloseFunc()
 	}
+	return nil
 }
 
 func (s *ScreenshotWriterMock) Write(_ context.Context, data []byte, metadata screenshotwriter.Metadata) error {

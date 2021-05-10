@@ -35,35 +35,32 @@ type Metadata struct {
 }
 
 type ScreenshotWriter interface {
-	Connect() error
-	Close()
+	serviceconnections.Connection
 	Write(context.Context, []byte, Metadata) error
 }
 
 type screenshotWriter struct {
-	clientConn *serviceconnections.ClientConn
-	client     contentwriterV1.ContentWriterClient
+	*serviceconnections.ClientConn
+	contentwriterV1.ContentWriterClient
 }
 
 func New(opts ...serviceconnections.ConnectionOption) ScreenshotWriter {
-	return &screenshotWriter{clientConn: serviceconnections.NewClientConn("ContentWriter", opts...)}
+	return &screenshotWriter{
+		ClientConn: serviceconnections.NewClientConn("ContentWriter", opts...),
+	}
 }
 
 func (s *screenshotWriter) Connect() error {
-	if err := s.clientConn.Connect(); err != nil {
+	if err := s.ClientConn.Connect(); err != nil {
 		return err
 	} else {
-		s.client = contentwriterV1.NewContentWriterClient(s.clientConn.Connection())
+		s.ContentWriterClient = contentwriterV1.NewContentWriterClient(s.ClientConn.Connection())
 		return nil
 	}
 }
 
-func (s *screenshotWriter) Close() {
-	s.clientConn.Close()
-}
-
 func (s *screenshotWriter) Write(ctx context.Context, data []byte, metadata Metadata) error {
-	stream, err := s.client.Write(ctx)
+	stream, err := s.ContentWriterClient.Write(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open ContentWriter session: %w", err)
 	}

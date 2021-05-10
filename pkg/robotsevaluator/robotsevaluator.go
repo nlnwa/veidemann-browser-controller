@@ -26,31 +26,28 @@ import (
 )
 
 type RobotsEvaluator interface {
-	Connect() error
-	Close()
+	serviceconnections.Connection
 	IsAllowed(context.Context, *robotsevaluatorV1.IsAllowedRequest) bool
 }
 
 type robotsEvaluator struct {
-	clientConn *serviceconnections.ClientConn
-	client     robotsevaluatorV1.RobotsEvaluatorClient
+	*serviceconnections.ClientConn
+	robotsevaluatorV1.RobotsEvaluatorClient
 }
 
 func New(opts ...serviceconnections.ConnectionOption) RobotsEvaluator {
-	return &robotsEvaluator{clientConn: serviceconnections.NewClientConn("RobotsEvaluator", opts...)}
-}
-
-func (r *robotsEvaluator) Connect() error {
-	if err := r.clientConn.Connect(); err != nil {
-		return err
-	} else {
-		r.client = robotsevaluatorV1.NewRobotsEvaluatorClient(r.clientConn.Connection())
-		return nil
+	return &robotsEvaluator{
+		ClientConn: serviceconnections.NewClientConn("RobotsEvaluator", opts...),
 	}
 }
 
-func (r *robotsEvaluator) Close() {
-	r.clientConn.Close()
+func (r *robotsEvaluator) Connect() error {
+	if err := r.ClientConn.Connect(); err != nil {
+		return err
+	} else {
+		r.RobotsEvaluatorClient = robotsevaluatorV1.NewRobotsEvaluatorClient(r.ClientConn.Connection())
+		return nil
+	}
 }
 
 func (r *robotsEvaluator) IsAllowed(ctx context.Context, request *robotsevaluatorV1.IsAllowedRequest) bool {
@@ -60,7 +57,7 @@ func (r *robotsEvaluator) IsAllowed(ctx context.Context, request *robotsevaluato
 	}
 
 	request.Politeness = resolvedPoliteness
-	reply, err := r.client.IsAllowed(ctx, request)
+	reply, err := r.RobotsEvaluatorClient.IsAllowed(ctx, request)
 	if err != nil {
 		log.Warnf("failed to get allowance from robotsEvaluator: %v", err)
 		return true
