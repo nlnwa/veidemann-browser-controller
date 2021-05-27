@@ -626,7 +626,7 @@ func (sess *Session) AlternativeSeed(ctx context.Context) {
 		},
 	}
 
-	seed, err := sess.DbAdapter.GetSeedByExecutionId(ctx, sess.Requests.RootRequest().CrawlLog.ExecutionId)
+	seed, err := sess.configCache.GetSeedByExecutionId(ctx, sess.Requests.RootRequest().CrawlLog.ExecutionId)
 	if err != nil {
 		log.Errorf("Failed to get seed by execution id")
 	}
@@ -654,7 +654,7 @@ func (sess *Session) AlternativeSeed(ctx context.Context) {
 			},
 		},
 	}
-	if err := sess.DbAdapter.WriteEvent(ctx, event); err != nil {
+	if err := sess.configCache.WriteEvent(ctx, event); err != nil {
 		log.Errorf("Error writing alternative seed event: %v", err)
 	}
 }

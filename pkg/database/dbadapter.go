@@ -28,6 +28,8 @@ import (
 type ConfigCache interface {
 	GetConfigObject(context.Context, *configV1.ConfigRef) (*configV1.ConfigObject, error)
 	GetScripts(context.Context, *configV1.BrowserConfig) ([]*configV1.ConfigObject, error)
+	WriteEvent(ctx context.Context, object *eventHandlerV1.EventObject) error
+	GetSeedByExecutionId(ctx context.Context, executionId string) (*configV1.ConfigObject, error)
 }
 
 type DbAdapter interface {
@@ -109,13 +111,13 @@ func (cc *configCache) GetScripts(ctx context.Context, browserConfig *configV1.B
 }
 
 
-func (cc *DbAdapter) GetSeedByExecutionId(ctx context.Context, executionId string) (*configV1.ConfigObject, error) {
+func (cc *configCache) GetSeedByExecutionId(ctx context.Context, executionId string) (*configV1.ConfigObject, error) {
 	return cc.db.GetSeedByExecutionId(ctx, executionId)
 }
 
 
 
-func (cc *DbAdapter) WriteEvent(ctx context.Context, eventObject *eventHandlerV1.EventObject) error {
+func (cc *configCache) WriteEvent(ctx context.Context, eventObject *eventHandlerV1.EventObject) error {
 	return cc.db.WriteEvent(ctx, eventObject)
 }
 
