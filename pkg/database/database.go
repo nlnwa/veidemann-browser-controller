@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
+	eventHandlerV1 "github.com/nlnwa/veidemann-api/go/eventhandler/v1"
 	"github.com/sirupsen/logrus"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
 	"time"
@@ -104,6 +105,24 @@ func (c *RethinkDbConnection) GetConfigObject(ctx context.Context, ref *configV1
 	return &result, nil
 }
 
+func (c *RethinkDbConnection) GetSeedByExecutionId(ctx context.Context, executionId string) (*configV1.ConfigObject, error) {
+	term := r.Table("executions").Get(executionId).Do(func(doc r.Term) interface{} {
+		return r.Table("config_seeds").Get(doc.Field("seedId"))
+	})
+	res, err := c.execRead(ctx, "get-seed-by-execution-id", &term)
+	if err != nil {
+		return nil, err
+	}
+	result := new(configV1.ConfigObject)
+	err = res.One(result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+
 // GetConfigsForSelector fetches a list of config.ConfigObject's matching config.Kind and config.Label
 func (c *RethinkDbConnection) GetConfigsForSelector(ctx context.Context, kind configV1.Kind, label *configV1.Label) ([]*configV1.ConfigObject, error) {
 	term := r.Table("config").GetAllByIndex("label", r.Expr([]string{label.Key, label.Value})).
@@ -130,6 +149,11 @@ func (c *RethinkDbConnection) GetConfigsForSelector(ctx context.Context, kind co
 	}
 
 	return configObjects, nil
+}
+
+func (c *RethinkDbConnection) WriteEvent(ctx context.Context, eventObject *eventHandlerV1.EventObject) error {
+	term := r.Table("events").Insert(eventObject)
+	return c.execWrite(ctx, "write-event", &term)
 }
 
 // execRead executes the given read term with a timeout

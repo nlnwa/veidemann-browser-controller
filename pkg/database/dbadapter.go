@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
+	eventHandlerV1 "github.com/nlnwa/veidemann-api/go/eventhandler/v1"
 	"strings"
 	"time"
 )
@@ -27,11 +28,15 @@ import (
 type ConfigCache interface {
 	GetConfigObject(context.Context, *configV1.ConfigRef) (*configV1.ConfigObject, error)
 	GetScripts(context.Context, *configV1.BrowserConfig) ([]*configV1.ConfigObject, error)
+	WriteEvent(ctx context.Context, object *eventHandlerV1.EventObject) error
+	GetSeedByExecutionId(ctx context.Context, executionId string) (*configV1.ConfigObject, error)
 }
 
 type DbAdapter interface {
 	GetConfigObject(context.Context, *configV1.ConfigRef) (*configV1.ConfigObject, error)
 	GetConfigsForSelector(context.Context, configV1.Kind, *configV1.Label) ([]*configV1.ConfigObject, error)
+	WriteEvent(ctx context.Context, object *eventHandlerV1.EventObject) error
+	GetSeedByExecutionId(ctx context.Context, executionId string) (*configV1.ConfigObject, error)
 }
 
 type configCache struct {
@@ -104,3 +109,15 @@ func (cc *configCache) GetScripts(ctx context.Context, browserConfig *configV1.B
 	}
 	return scripts, nil
 }
+
+
+func (cc *configCache) GetSeedByExecutionId(ctx context.Context, executionId string) (*configV1.ConfigObject, error) {
+	return cc.db.GetSeedByExecutionId(ctx, executionId)
+}
+
+
+
+func (cc *configCache) WriteEvent(ctx context.Context, eventObject *eventHandlerV1.EventObject) error {
+	return cc.db.WriteEvent(ctx, eventObject)
+}
+

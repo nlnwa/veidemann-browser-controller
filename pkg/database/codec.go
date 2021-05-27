@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
+	eventHandlerV1 "github.com/nlnwa/veidemann-api/go/eventhandler/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -63,6 +64,22 @@ var decodeCrawlExecutionStatus = func(encoded interface{}, value reflect.Value) 
 	return nil
 }
 
+var decodeEventObject = func(encoded interface{}, value reflect.Value) error {
+	b, err := json.Marshal(encoded)
+	if err != nil {
+		return fmt.Errorf("error decoding EventObject: %w", err)
+	}
+
+	var eo eventHandlerV1.EventObject
+	err = protojson.Unmarshal(b, &eo)
+	if err != nil {
+		return fmt.Errorf("error decoding EventJobject: #{err}")
+	}
+
+	value.Set(reflect.ValueOf(eo))
+	return nil
+}
+
 var encodeProtoMessage = func(value interface{}) (i interface{}, err error) {
 	b, err := protojson.Marshal(value.(proto.Message))
 	if err != nil {
@@ -87,6 +104,11 @@ func init() {
 		reflect.TypeOf(&frontierV1.CrawlExecutionStatus{}),
 		encodeProtoMessage,
 		decodeCrawlExecutionStatus,
+	)
+	encoding.SetTypeEncoding(
+		reflect.TypeOf(&eventHandlerV1.EventObject{}),
+		encodeProtoMessage,
+		decodeEventObject,
 	)
 	encoding.SetTypeEncoding(
 		reflect.TypeOf(map[string]interface{}{}),

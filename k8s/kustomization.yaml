@@ -11,29 +11,3 @@ resources:
 
 patchesStrategicMerge:
   - deployment_log_level_patch.yaml
-
-patchesJson6902:
-  - target:
-      kind: Deployment
-      name: veidemann-harvester
-      version: v1
-      group: apps
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/envFrom/0/secretRef/name
-        value: skaffold-veidemann-browser-controller-rethinkdb
-
-      - op: replace
-        path: /spec/template/spec/volumes/3/secret/secretName
-        value: skaffold-veidemann-browser-controller-cache-cert
-
-secretGenerator:
-  - name: skaffold-veidemann-browser-controller-rethinkdb
-    envs:
-      - .env
-  - name: skaffold-veidemann-browser-controller-cache-cert
-    type: Opaque
-    files:
-      - cert/cache-selfsigned.key
-      - cert/cache-selfsignedCA.crt
-      - cert/ec.param
