@@ -270,6 +270,19 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 		Touch:     false,
 	}
 
+	blockedUrls := []string{"*google-analytics.com/analytics.js*",
+		"*google-analytics.com/ga.js*",
+		"*google-analytics.com/ga_exp.js*",
+		"*google-analytics.com/urchin.js*",
+		"*google-analytics.com/collect*",
+		"*google-analytics.com/r/collect*",
+		"*google-analytics.com/__utm.gif*",
+		"*google-analytics.com/gtm/js?*",
+		"*google-analytics.com/cx/api.js*",
+		"*cdn.ampproject.org/*/amp-analytics*.js",
+		"*log.medietall.no/analytics.js*",
+	}
+
 	// run task list
 	if err := chromedp.Run(sess.ctx,
 		security.SetIgnoreCertificateErrors(true),
@@ -282,6 +295,7 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 		network.SetCookies(sess.getCookieParams(sess.RequestedUrl)),
 		runtime.Enable(),
 		target.SetAutoAttach(true, true).WithFlatten(true),
+		network.SetBlockedURLS(blockedUrls),
 	); err != nil {
 		return nil, fmt.Errorf("failed initializing browser: %w", err)
 	}
