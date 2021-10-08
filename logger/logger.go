@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 National Library of Norway.
+ * Copyright 2021 National Library of Norway.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,42 +17,44 @@
 package logger
 
 import (
-	"fmt"
-	log "github.com/sirupsen/logrus"
-	stdLog "log"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	stdlog "log"
+	"os"
 	"strings"
+	"time"
 )
 
-const (
-	FormatterJson   = "json"
-	FormatterLogfmt = "logfmt"
-)
+func InitLog(level string, format string, logCaller bool) {
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
-func InitLog(level, formatter string, logMethod bool) error {
-	stdLog.SetOutput(log.StandardLogger().Writer())
-
-	// Configure the log level, defaults to "INFO"
-	logLevel, err := log.ParseLevel(level)
-	if err != nil {
-		return fmt.Errorf("failed to parse log level: %q", level)
-	}
-	log.SetLevel(logLevel)
-
-	// Configure the log formatter, defaults to ASCII formatter
-	switch strings.ToLower(formatter) {
-	case FormatterLogfmt:
-		log.SetFormatter(&log.TextFormatter{
-			DisableColors: true,
-			FullTimestamp: true,
-		})
-	case FormatterJson:
-		log.SetFormatter(&log.JSONFormatter{})
-	default:
-		return fmt.Errorf("unknown formatter type: %q", formatter)
+	switch strings.ToLower(level) {
+	case "panic":
+		log.Logger = log.Level(zerolog.PanicLevel)
+	case "fatal":
+		log.Logger = log.Level(zerolog.FatalLevel)
+	case "error":
+		log.Logger = log.Level(zerolog.ErrorLevel)
+	case "warn":
+		log.Logger = log.Level(zerolog.WarnLevel)
+	case "info":
+		log.Logger = log.Level(zerolog.InfoLevel)
+	case "debug":
+		log.Logger = log.Level(zerolog.DebugLevel)
+	case "trace":
+		log.Logger = log.Level(zerolog.TraceLevel)
 	}
 
-	if logMethod {
-		log.SetReportCaller(true)
+	if format == "logfmt" {
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
 	}
-	return nil
+
+	if logCaller {
+		log.Logger = log.With().Caller().Logger()
+	}
+
+	stdlog.SetFlags(0)
+	stdlog.SetOutput(log.Logger)
+
+	log.Info().Msgf("Setting log level to %s", level)
 }

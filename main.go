@@ -101,13 +101,11 @@ func main() {
 	}
 
 	// init logger
-	if err := logger.InitLog(
+	logger.InitLog(
 		viper.GetString("log-level"),
 		viper.GetString("log-formatter"),
 		viper.GetBool("log-method"),
-	); err != nil {
-		log.Fatalf("Could not initialize logging: %v", err)
-	}
+	)
 
 	defer func() {
 		if r := recover(); r != nil {
