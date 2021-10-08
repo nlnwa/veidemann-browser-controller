@@ -29,7 +29,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/session"
 	"github.com/nlnwa/veidemann-browser-controller/url"
 	"github.com/opentracing/opentracing-go"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -77,12 +77,12 @@ func (a *ApiServer) Start() error {
 	a.grpcServer = grpc.NewServer(opts...)
 	browsercontrollerV1.RegisterBrowserControllerServer(a.grpcServer, a)
 
-	log.Infof("API server listening on %s", a.addr)
+	log.Info().Str("address", a.addr).Msg("API server listening")
 	return a.grpcServer.Serve(ln)
 }
 
 func (a *ApiServer) Close() {
-	log.Infof("Shutting down API server")
+	log.Info().Msg("Shutting down API server")
 
 	// Set a timer to fire a hard shutdown if graceful shutdown doesn't return
 	t := time.AfterFunc(time.Minute, a.grpcServer.Stop)
@@ -103,12 +103,10 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				fetchError = v
 			case error:
 				fetchError = errors.New(-5, "Runtime error", v.Error())
-			case *log.Entry:
-				fetchError = errors.New(-5, "Runtime error", v.Message)
 			default:
 				fetchError = errors.New(-5, "Runtime error", fmt.Sprintf("%s", v))
 			}
-			log.Errorf("Panic while serving proxy: %s", fetchError.Error())
+			log.Error().Err(fetchError).Msg("API Server recovered from panic")
 
 			// Add stacktrace to error
 			fetchError.CommonsError().Detail += "\n" + string(debug.Stack())
@@ -169,7 +167,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 
 			sess = a.sessions.Get(int(v.New.ProxyId))
 			if sess == nil {
-				log.Warnf("Cancelling nil session, proxy: %v, %v %v", v.New.ProxyId, v.New.Method, v.New.Uri)
+				log.Warn().Msgf("Cancelling nil session, proxy: %v, %v %v", v.New.ProxyId, v.New.Method, v.New.Uri)
 				if err = Send(stream.Send, &browsercontrollerV1.DoReply{
 					Action: &browsercontrollerV1.DoReply_Cancel{
 						Cancel: "Cancelled by browser controller",
@@ -187,7 +185,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				)
 			}
 
-			log.Tracef("Check robots for %v, jeid: %v, ceid: %v, policy: %v",
+			log.Trace().Msgf("Check robots for %v, jeid: %v, ceid: %v, policy: %v",
 				v.New.Uri,
 				sess.RequestedUrl.JobExecutionId,
 				sess.RequestedUrl.ExecutionId,
@@ -204,10 +202,10 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 
 			isAllowed := a.robotsEvaluator.IsAllowed(ctx, robotsRequest)
 			if !isAllowed {
-				log.Infof("URI %v was blocked by robots.txt (ceid: %v)", v.New.Uri, sess.RequestedUrl.ExecutionId)
+				log.Info().Msgf("URI %v was blocked by robots.txt (ceid: %v)", v.New.Uri, sess.RequestedUrl.ExecutionId)
 				req = sess.Requests.GetByRequestId(v.New.RequestId)
 				if req == nil {
-					log.Warnf("No request found for %v", v.New.RequestId)
+					log.Warn().Msgf("No request found for %v", v.New.RequestId)
 				} else {
 					req.GotNew = true
 					if err := sess.Notify(req.RequestId); err != nil {
@@ -244,7 +242,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 					Url := url.Normalize(v.New.Uri)
 					req = sess.Requests.GetByUrl(Url, true)
 					if req == nil {
-						log.Debugf("No new request found for %v %v %v. Has fulfilled request: %v", v.New.RequestId, v.New.Method, Url, sess.Requests.GetByUrl(Url, false) != nil)
+						log.Debug().Msgf("No new request found for %v %v %v. Has fulfilled request: %v", v.New.RequestId, v.New.Method, Url, sess.Requests.GetByUrl(Url, false) != nil)
 					} else {
 						req.GotNew = true
 					}
@@ -253,7 +251,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 					// The request was not intercepted. Probably from a subsystem in browser e.g. a service worker
 					// We cancel this request at the moment
 					// TODO: revisit this to see if we can do anything smarter
-					log.Debugf("New request from proxy without ID: %v %v", v.New.Method, v.New.Uri)
+					log.Debug().Msgf("New request from proxy without ID: %v %v", v.New.Method, v.New.Uri)
 					if err = Send(stream.Send, &browsercontrollerV1.DoReply{
 						Action: &browsercontrollerV1.DoReply_Cancel{
 							Cancel: "Cancelled by browser controller",
@@ -266,7 +264,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 			} else {
 				req = sess.Requests.GetByRequestId(v.New.RequestId)
 				if req == nil {
-					log.Warnf("No request found for %v", v.New.RequestId)
+					log.Warn().Msgf("No request found for %v", v.New.RequestId)
 				} else {
 					req.GotNew = true
 					if err := sess.Notify(req.RequestId); err != nil {
@@ -289,7 +287,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 			}
 		case *browsercontrollerV1.DoRequest_Notify:
 			if sess == nil {
-				log.Warnf("Notify without session: %v", v.Notify.GetActivity())
+				log.Warn().Msgf("Notify without session: %v", v.Notify.GetActivity())
 				return status.Errorf(codes.Canceled, "Session is cancelled")
 			}
 			if req != nil {
@@ -298,15 +296,15 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				}
 			}
 		case *browsercontrollerV1.DoRequest_Completed:
-			log.Tracef("Request completed %v %v %v", v.Completed.CrawlLog.StatusCode, v.Completed.CrawlLog.Method, v.Completed.CrawlLog.RequestedUri)
+			log.Trace().Msgf("Request completed %v %v %v", v.Completed.CrawlLog.StatusCode, v.Completed.CrawlLog.Method, v.Completed.CrawlLog.RequestedUri)
 			if sess == nil || (sess.Id != 0 && req == nil) {
-				log.Infof("Missing session: %v %v %v", v.Completed.CrawlLog.WarcId, v.Completed.CrawlLog.Method, v.Completed.CrawlLog.RequestedUri)
+				log.Info().Msgf("Missing session: %v %v %v", v.Completed.CrawlLog.WarcId, v.Completed.CrawlLog.Method, v.Completed.CrawlLog.RequestedUri)
 			}
 			if req == nil {
 				if sess.Id == 0 {
 					if !v.Completed.Cached && v.Completed.CrawlLog.GetWarcId() != "" {
 						if err := a.logWriter.WriteCrawlLog(stream.Context(), v.Completed.CrawlLog); err != nil {
-							log.Errorf("Failed writing crawlLog for direct session: %v", err)
+							log.Error().Msgf("Failed writing crawlLog for direct session: %v", err)
 						}
 					}
 				} else {
@@ -314,7 +312,7 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 					case "OPTIONS":
 					case "CONNECT":
 					default:
-						log.Errorf("Missing reqId for %v %v %v, Cached: %v",
+						log.Error().Msgf("Missing reqId for %v %v %v, Cached: %v",
 							v.Completed.CrawlLog.Method, v.Completed.CrawlLog.StatusCode,
 							v.Completed.CrawlLog.RequestedUri, v.Completed.Cached)
 					}
@@ -323,7 +321,8 @@ func (a *ApiServer) Do(stream browsercontrollerV1.BrowserController_DoServer) (e
 				req.CrawlLog = v.Completed.CrawlLog
 				if v.Completed.Cached {
 					if sess.Requests.InitialRequest().RequestId == req.RequestId {
-						sess.AbortFetch()
+						log.Debug().Msg("Aborting fetch")
+						_ = sess.AbortFetch()
 					}
 					req.FromCache = true
 				}

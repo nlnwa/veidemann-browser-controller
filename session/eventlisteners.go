@@ -28,35 +28,35 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/nlnwa/veidemann-browser-controller/requests"
 	"github.com/nlnwa/veidemann-browser-controller/url"
-	log "github.com/sirupsen/logrus"
-)
+	)
 
 func (sess *Session) initListeners(ctx context.Context) {
 	chromedp.ListenTarget(ctx, sess.listenFunc(ctx))
 }
 
 func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
+	log := sess.logger
 	return func(ev interface{}) {
 		switch ev := ev.(type) {
 		case *network.EventRequestWillBeSent:
-			log.Tracef("Request will be sent: %v, %v, %v, %v, %v, %v", ev.RequestID, ev.Type, ev.FrameID, ev.Initiator.Type, ev.LoaderID, ev.DocumentURL)
+			log.Trace().Msgf("Request will be sent: %v, %v, %v, %v, %v, %v", ev.RequestID, ev.Type, ev.FrameID, ev.Initiator.Type, ev.LoaderID, ev.DocumentURL)
 			if req := sess.Requests.GetByNetworkId(ev.RequestID.String()); req != nil {
 				req.Initiator = ev.Initiator.Type.String()
 			}
 		case *network.EventLoadingFailed:
-			log.Debugf("Loading failed: %v, %v, Reason; %v, Cancel: %v, %v, %v", ev.RequestID, ev.Type, ev.BlockedReason, ev.Canceled, ev.ErrorText, ev.Timestamp.Time())
+			log.Debug().Msgf("Loading failed: %v, %v, Reason; %v, Cancel: %v, %v, %v", ev.RequestID, ev.Type, ev.BlockedReason, ev.Canceled, ev.ErrorText, ev.Timestamp.Time())
 		case *page.EventFrameStartedLoading:
-			log.Tracef("Frame started loading: %v", ev.FrameID)
+			log.Trace().Msgf("Frame started loading: %v", ev.FrameID)
 			sess.Requests.NotifyLoadStart()
 		case *page.EventFrameStoppedLoading:
-			log.Tracef("Frame stopped loading: %v", ev.FrameID)
+			log.Trace().Msgf("Frame stopped loading: %v", ev.FrameID)
 			sess.Requests.NotifyLoadFinished()
 		case *page.EventFileChooserOpened:
-			log.Warnf("File chooser opened: %v %v %v", ev.BackendNodeID, ev.FrameID, ev.Mode)
+			log.Warn().Msgf("File chooser opened: %v %v %v", ev.BackendNodeID, ev.FrameID, ev.Mode)
 		case *page.EventDownloadWillBegin:
-			log.Tracef("Download will begin: %v %v", ev.FrameID, ev.URL)
+			log.Trace().Msgf("Download will begin: %v %v", ev.FrameID, ev.URL)
 		case *page.EventJavascriptDialogOpening:
-			log.Debugf("Javascript dialog opening %v", ev.Message)
+			log.Debug().Msgf("Javascript dialog opening %v", ev.Message)
 			go func() {
 				accept := false
 				if ev.Type == "alert" {
@@ -65,11 +65,11 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 				if err := chromedp.Run(ctx,
 					page.HandleJavaScriptDialog(accept),
 				); err != nil {
-					log.Errorf("Could not handle JavaScript dialog: %v", err)
+					log.Error().Err(err).Msg("Could not handle JavaScript dialog")
 				}
 			}()
 		case *target.EventTargetCreated:
-			log.Tracef("Target created: %v :: %v :: %v :: %v :: %v :: %v :: %v\n", ev.TargetInfo.TargetID, ev.TargetInfo.OpenerID, ev.TargetInfo.BrowserContextID, ev.TargetInfo.Type, ev.TargetInfo.Title, ev.TargetInfo.URL, ev.TargetInfo.Attached)
+			log.Trace().Msgf("Target created: %v :: %v :: %v :: %v :: %v :: %v :: %v\n", ev.TargetInfo.TargetID, ev.TargetInfo.OpenerID, ev.TargetInfo.BrowserContextID, ev.TargetInfo.Type, ev.TargetInfo.Title, ev.TargetInfo.URL, ev.TargetInfo.Attached)
 			newCtx, _ := chromedp.NewContext(ctx, chromedp.WithTargetID(ev.TargetInfo.TargetID))
 			go func() {
 				select {
@@ -78,7 +78,7 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 				}
 			}()
 			if err := chromedp.Run(newCtx); err != nil {
-				log.Warnf("Failed connecting to new target: %v", err)
+				log.Warn().Err(err).Msg("Failed connecting to new target")
 			}
 
 			var actions []chromedp.Action
@@ -116,14 +116,14 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 
 			go func() {
 				if err := chromedp.Run(newCtx, actions...); err != nil {
-					log.Errorf("Failed initializing new target: %v", err)
+					log.Error().Err(err).Msg("Failed initializing new target")
 				}
 
 				chromedp.ListenTarget(newCtx, sess.listenFunc(newCtx))
 			}()
 			err := sess.Notify(ev.TargetInfo.TargetID.String())
 			if err != nil {
-				log.Errorf("Failed to notify session of new target: %v", err)
+				log.Error().Err(err).Msg("Failed to notify session of new target")
 			}
 		case *fetch.EventRequestPaused:
 			go func() {
@@ -153,14 +153,14 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 					h[i] = &fetch.HeaderEntry{Name: "veidemann_reqid", Value: ev.RequestID.String()}
 					continueRequest = continueRequest.WithHeaders(h)
 				} else {
-					log.Infof("RESPONSE REQUEST %v %v %v\n", ev.ResponseStatusCode, ev.ResponseErrorReason, ev.Request.URL)
+					log.Debug().Msgf("RESPONSE REQUEST %v %v %v\n", ev.ResponseStatusCode, ev.ResponseErrorReason, ev.Request.URL)
 				}
 				if err := chromedp.Run(ctx, continueRequest); err != nil {
-					log.Debugf("Failed sending continue: %v", err)
+					log.Debug().Msgf("Failed sending continue: %v", err)
 				} else {
 					err = sess.Notify(ev.RequestID.String())
 					if err != nil {
-						log.Errorf("Failed to notify session after request continuation: %v", err)
+						log.Error().Err(err).Msg("Failed to notify session after request continuation")
 					}
 				}
 			}()

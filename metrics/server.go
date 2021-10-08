@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"net/http"
 	"time"
 )
@@ -46,7 +46,7 @@ func NewServer(listenInterface string, listenPort int, path string) *Server {
 }
 
 func (a *Server) Start() error {
-	log.Infof("Metrics server listening on %s", a.Addr)
+	log.Info().Str("address", a.Addr).Msg("Metrics server")
 	if err := a.ListenAndServe(); err != nil {
 		if err != http.ErrServerClosed {
 			return err
@@ -56,7 +56,7 @@ func (a *Server) Start() error {
 }
 
 func (a *Server) Close() error {
-	log.Infof("Shutting down Metrics server")
+	log.Info().Msg("Shutting down Metrics server")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	a.SetKeepAlivesEnabled(false)

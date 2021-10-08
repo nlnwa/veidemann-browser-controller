@@ -24,7 +24,7 @@ import (
 	contentwriterV1 "github.com/nlnwa/veidemann-api/go/contentwriter/v1"
 	logV1 "github.com/nlnwa/veidemann-api/go/log/v1"
 	"github.com/nlnwa/veidemann-browser-controller/serviceconnections"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 )
 
 type Metadata struct {
@@ -116,7 +116,7 @@ func (s *screenshotWriter) Write(ctx context.Context, data []byte, metadata Meta
 
 	ip := metadata.CrawlLog.IpAddress
 	if ip == "" {
-		log.Errorf("Missing IP address for screenshot, using 127.0.0.1")
+		log.Warn().Msg("Missing IP address for screenshot, using 127.0.0.1")
 		ip = "127.0.0.1"
 	}
 
@@ -137,7 +137,12 @@ func (s *screenshotWriter) Write(ctx context.Context, data []byte, metadata Meta
 	if response, err := stream.CloseAndRecv(); err != nil {
 		return err
 	} else {
-		log.Debugf("Screenshot written: %v\n", response.GetMeta().RecordMeta)
+		log.Debug().
+			Str("url", metadata.CrawlLog.GetRequestedUri()).
+			Int32("width", metadata.BrowserConfig.GetWindowWidth()).
+			Int32("height", metadata.BrowserConfig.GetWindowHeight()).
+			Int("records", len(response.GetMeta().GetRecordMeta())).
+			Msg("Screenshot written")
 	}
 	return nil
 }

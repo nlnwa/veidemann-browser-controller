@@ -19,7 +19,7 @@ package session
 import (
 	"context"
 	"github.com/nlnwa/veidemann-browser-controller/metrics"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"sync"
 	"time"
 )
@@ -106,14 +106,14 @@ func (sr *Registry) CloseWait(timeout time.Duration) {
 		sr.wg.Wait()
 		close(c)
 	}()
-	log.Debugf("Waiting for %v remaining sessions", sr.CurrentSessions())
+	log.Debug().Msgf("Waiting for %v remaining sessions", sr.CurrentSessions())
 	select {
 	case <-c:
-		log.Infof("All sessions finished")
+		log.Debug().Msg("All sessions finished")
 		metrics.ActiveBrowserSessions.Set(0)
 		metrics.BrowserSessions.Set(0)
 	case <-time.After(timeout):
-		log.Infof("Timed out waiting for %d sessions to finish.", sr.CurrentSessions())
+		log.Warn().Msgf("Timed out waiting for %d sessions to finish.", sr.CurrentSessions())
 		metrics.ActiveBrowserSessions.Set(0)
 		metrics.BrowserSessions.Set(0)
 	}

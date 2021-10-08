@@ -32,11 +32,10 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/serviceconnections"
 	"github.com/nlnwa/veidemann-browser-controller/session"
 	"github.com/nlnwa/veidemann-browser-controller/testutil"
+	logServiceTestUtil "github.com/nlnwa/veidemann-log-service/pkg/testutil"
 	"github.com/nlnwa/veidemann-recorderproxy/recorderproxy"
 	proxyServiceConnections "github.com/nlnwa/veidemann-recorderproxy/serviceconnections"
 	proxyTestUtil "github.com/nlnwa/veidemann-recorderproxy/testutil"
-	logServiceTestUtil "github.com/nlnwa/veidemann-log-service/pkg/testutil"
-	log "github.com/sirupsen/logrus"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
@@ -52,8 +51,6 @@ var sessions *session.Registry
 var localhost = GetOutboundIP().String()
 
 func TestMain(m *testing.M) {
-	log.SetLevel(log.WarnLevel)
-
 	// setup browser
 	ctx, cancelBrowser := context.WithCancel(context.Background())
 	defer cancelBrowser()
@@ -96,8 +93,7 @@ func TestMain(m *testing.M) {
 		serviceconnections.WithPort(5002),
 	)
 	if err := logWriter.Connect(); err != nil {
-		log.Fatal(err)
-		return
+		panic(err)
 	}
 
 	// setup sessions
@@ -293,7 +289,7 @@ func localRecorderProxy(id int, conn *proxyServiceConnections.Connections, nextP
 func GetOutboundIP() net.IP {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 	defer func() {
 		_ = conn.Close()

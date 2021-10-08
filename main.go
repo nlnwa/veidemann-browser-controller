@@ -31,7 +31,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/session"
 	"github.com/nlnwa/veidemann-browser-controller/tracing"
 	"github.com/opentracing/opentracing-go"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
@@ -43,6 +43,13 @@ import (
 )
 
 func main() {
+	// init logger
+	logger.InitLog(
+		viper.GetString("log-level"),
+		viper.GetString("log-formatter"),
+		viper.GetBool("log-method"),
+	)
+
 	pflag.BoolP("help", "h", false, "Usage instructions")
 	pflag.String("interface", "", "interface the browser controller api listens to. No value means all interfaces.")
 	pflag.Int("port", 8080, "port the browser controller api listens to.")
@@ -92,7 +99,7 @@ func main() {
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
 	if err := viper.BindPFlags(pflag.CommandLine); err != nil {
-		log.Fatalf("Could not parse flags: %s", err)
+		log.Fatal().Err(err).Msg("Failed to parse flags")
 	}
 
 	if viper.GetBool("help") {
@@ -100,27 +107,22 @@ func main() {
 		return
 	}
 
-	// init logger
-	logger.InitLog(
-		viper.GetString("log-level"),
-		viper.GetString("log-formatter"),
-		viper.GetBool("log-method"),
-	)
-
 	defer func() {
 		if r := recover(); r != nil {
-			log.Fatal(r)
+			if err, ok := r.(error); ok {
+				log.Fatal().Err(err).Msg("Goodbye!")
+			}
 		}
 	}()
 
-	log.Infof("Browser Controller starting...")
+	log.Info().Msg("Browser Controller starting...")
 	defer func() {
-		log.Infof("Browser Controller stopped")
+		log.Info().Msg("Browser Controller stopped")
 	}()
 
 	// setup tracing
 	if tracer, closer, err := tracing.Init("Browser Controller"); err != nil {
-		log.Warningf("Failed to initialize tracing: %v", err)
+		log.Warn().Err(err).Msg("Failed to initialize tracing")
 	} else {
 		defer closer.Close()
 		opentracing.SetGlobalTracer(tracer)
@@ -211,7 +213,7 @@ func main() {
 	metricsServer := metrics.NewServer(viper.GetString("metrics-interface"), viper.GetInt("metrics-port"), viper.GetString("metrics-path"))
 	go func() {
 		if err := metricsServer.Start(); err != nil {
-			log.WithError(err).Error("Metrics server failed")
+			log.Error().Err(err).Msg("Metrics server error")
 			browserController.Shutdown()
 		}
 	}()
@@ -221,7 +223,7 @@ func main() {
 		signals := make(chan os.Signal)
 		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 		sig := <-signals
-		log.WithField("signal", sig).Debugf("Received signal")
+		log.Debug().Str("signal", sig.String()).Msg("Received signal")
 		browserController.Shutdown()
 	}()
 

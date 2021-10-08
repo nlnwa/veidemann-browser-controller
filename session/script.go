@@ -28,7 +28,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/url"
 	"github.com/opentracing/opentracing-go"
 	tracelog "github.com/opentracing/opentracing-go/log"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"regexp"
 	"time"
 )
@@ -99,7 +99,7 @@ func (sess *Session) GetReplacementScript(uri string) *configV1.BrowserScript {
 					currentBestMatch = bc.GetBrowserScript()
 				}
 			} else {
-				log.Warnf("Could not match url for replacement script %v", err)
+				log.Warn().Msgf("Could not match url for replacement script %v", err)
 			}
 		}
 	}
@@ -112,9 +112,9 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 	wait := func() {
 		waitStart := time.Now()
 		_ = sess.netActivityTimer.WaitForCompletion()
-		log.Tracef("Waited %v for network activity to settle", time.Since(waitStart))
+		log.Trace().Msgf("Waited %v for network activity to settle", time.Since(waitStart))
 		notifyCount := sess.netActivityTimer.Reset()
-		log.Tracef("Got %d notifications while waiting for network activity to settle", notifyCount)
+		log.Trace().Msgf("Got %d notifications while waiting for network activity to settle", notifyCount)
 	}
 
 	var resolveExecutionContextId func() (runtime.ExecutionContextID, error)
@@ -148,13 +148,13 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 			return nil, fmt.Errorf("failed to resolve execution context id for script %s (%s): %w", name, id, err)
 		}
 		span.SetTag("script.name", name).SetTag("script.id", id).SetTag("script.eci", eci)
-		log.Debugf("Calling script %s (%s) in context %d with arguments %s", name, id, eci, arguments)
+		log.Debug().Msgf("Calling script %s (%s) in context %d with arguments %s", name, id, eci, arguments)
 
 		res, err := callScript(ctx, eci, configObject.GetBrowserScript().GetScript(), arguments)
 		if err != nil {
 			span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 		}
-		log.Debugf("Script %s (%s) returned: %s", name, id, res)
+		log.Debug().Msgf("Script %s (%s) returned: %s", name, id, res)
 
 		return res, err
 	}
@@ -251,7 +251,7 @@ func match(regExps []string, uri string) bool {
 	for _, urlRegexp := range regExps {
 		re, err := regexp.Compile(urlRegexp)
 		if err != nil {
-			log.Warnf("Failed to compile regexp: %s", urlRegexp)
+			log.Warn().Msgf("Failed to compile regexp [%s]", urlRegexp)
 			continue
 		}
 		match = re.MatchString(normalizedUri)

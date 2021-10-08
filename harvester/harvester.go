@@ -27,7 +27,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/serviceconnections"
 	"github.com/opentracing/opentracing-go"
 	tracelog "github.com/opentracing/opentracing-go/log"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"io"
 	"strconv"
 	"sync"
@@ -136,14 +136,14 @@ func (h *harvester) Harvest(ctx context.Context, fetch FetchFunc) error {
 		SetTag("harvest.spec.seed_uri", harvestSpec.QueuedUri.SeedUri).
 		SetTag("harvest.spec.discovery_path", harvestSpec.QueuedUri.DiscoveryPath)
 
-	log.WithField("uri", harvestSpec.QueuedUri.Uri).Tracef("Starting fetch")
+	log.Trace().Str("uri", harvestSpec.QueuedUri.Uri).Msg("Starting fetch")
 	metrics.ActiveBrowserSessions.Inc()
 	defer metrics.ActiveBrowserSessions.Dec()
 	metrics.PagesTotal.Inc()
 	renderResult, err := fetch(spanCtx, harvestSpec.QueuedUri, harvestSpec.CrawlConfig)
 	if err != nil {
 		span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
-		log.Errorf("Failed to fetch: %v", err)
+		log.Error().Err(err).Msg("Fetch error")
 		renderResult = &RenderResult{
 			Error: errors.CommonsError(err),
 		}

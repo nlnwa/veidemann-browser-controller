@@ -20,7 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"strconv"
 	"time"
@@ -90,7 +90,7 @@ func (opts *connectionOptions) connectService() (*grpc.ClientConn, error) {
 		}
 		return nil, err
 	}
-	log.Infof("Connected to %s at %s", opts.serviceName, opts.Addr())
+	log.Info().Str("address", opts.Addr()).Str("service", opts.serviceName).Msg("Connected")
 	return clientConn, nil
 }
 

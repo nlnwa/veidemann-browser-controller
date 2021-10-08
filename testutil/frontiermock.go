@@ -23,7 +23,6 @@ import (
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	"github.com/nlnwa/veidemann-recorderproxy/serviceconnections"
-	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
 	"io"
@@ -72,7 +71,7 @@ func NewFrontierMock(requestPageFunc RequestPageFunc, errorFunc ErrorFunc, metri
 
 	go func() {
 		if err := m.Server.Serve(m.lis); err != nil {
-			log.Fatalf("Server exited with error: %v", err)
+			panic(err)
 		}
 	}()
 

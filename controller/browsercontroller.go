@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"github.com/nlnwa/veidemann-browser-controller/server"
 	"github.com/nlnwa/veidemann-browser-controller/session"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"time"
 )
 
@@ -66,7 +66,7 @@ func (bc *BrowserController) Run() (err error) {
 	// give api server time to start
 	time.Sleep(time.Millisecond)
 
-	log.Infof("Browser Controller started")
+	log.Info().Msg("Browser Controller started")
 	for {
 		select {
 		case <-bc.ctx.Done():
@@ -78,7 +78,7 @@ func (bc *BrowserController) Run() (err error) {
 			}
 			go func() {
 				if err := bc.opts.harvester.Harvest(bc.ctx, sess.Fetch); err != nil {
-					log.WithError(err).WithField("session", sess.Id).Warning("Harvest error")
+					log.Warn().Err(err).Int("session", sess.Id).Msg("Harvest error")
 					time.Sleep(time.Second) // delay release of session after error
 				}
 				if sess != nil {
@@ -90,6 +90,6 @@ func (bc *BrowserController) Run() (err error) {
 }
 
 func (bc *BrowserController) Shutdown() {
-	log.Infof("Shutting down Browser Controller...")
+	log.Info().Msg("Shutting down Browser Controller...")
 	bc.cancel()
 }

@@ -19,7 +19,7 @@ package requests
 import (
 	"github.com/nlnwa/veidemann-api/go/frontier/v1"
 	"github.com/nlnwa/veidemann-browser-controller/syncx"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"sync"
 )
 
@@ -114,9 +114,17 @@ func (r *requestRegistry) MatchCrawlLogs() bool {
 	for _, l := range r.requests {
 		if l.CrawlLog == nil {
 			unresolved++
-			log.Tracef("Missing crawllog for %v -- %v %v", l.RequestId, l.GotNew, l.GotComplete)
+			log.Trace().
+				Str("requestId", l.RequestId).
+				Bool("new", l.GotNew).
+				Bool("complete", l.GotComplete).
+				Msg("Missing crawlLog")
 		} else {
-			log.Tracef("found crawllog for %v -- %v %v", l.RequestId, l.GotNew, l.GotComplete)
+			log.Trace().
+				Str("requestId", l.RequestId).
+				Bool("new", l.GotNew).
+				Bool("complete", l.GotComplete).
+				Msg("Found crawlLog")
 		}
 	}
 	if unresolved > 0 {
@@ -171,7 +179,14 @@ func (r *requestRegistry) FinalizeResponses(requestedUrl *frontier.QueuedUri) {
 				rr.CrawlLog.DiscoveryPath = discoveryType
 			}
 		} else {
-			log.Warnf("CrawlLog missing: %v %v %v %v %v %v\n", idx, rr.NetworkId, rr.GotNew, rr.GotComplete, rr.RequestId, rr.Url)
+			log.Warn().
+				Str("url", rr.Url).
+				Int("index", idx).
+				Str("requestId", rr.RequestId).
+				Str("networkId", rr.NetworkId).
+				Bool("new", rr.GotNew).
+				Bool("complete", rr.GotComplete).
+				Msgf("Missing crawlLog")
 		}
 	}
 }

@@ -18,7 +18,7 @@ package syncx
 
 import (
 	"errors"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"sync/atomic"
 	"time"
 )
@@ -42,7 +42,10 @@ type CompletionTimer struct {
 }
 
 func NewCompletionTimer(maxIdleTime, maxTotalTime time.Duration, check func() bool) *CompletionTimer {
-	log.Tracef("MaxIdleTime: %v, MaxTotalTime: %v", maxIdleTime, maxTotalTime)
+	log.Trace().
+		Dur("maxIdleTime", maxIdleTime).
+		Dur("maxTotalTime", maxTotalTime).
+		Msg("Completion timer")
 	if check == nil {
 		check = func() bool {
 			return false

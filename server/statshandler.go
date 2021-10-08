@@ -18,7 +18,7 @@ package server
 
 import (
 	"context"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/stats"
 	"sync/atomic"
 )
@@ -38,7 +38,7 @@ func (m *myStatsHandler) HandleRPC(ctx context.Context, stat stats.RPCStats) {
 	case *stats.End:
 		atomic.AddInt32(&m.openRPCs, -1)
 		if v.Error != nil {
-			log.Tracef("RPC END With error: %v", v.Error)
+			log.Trace().Msgf("RPC END With error: %v", v.Error)
 		}
 	}
 }
@@ -51,7 +51,7 @@ func (m *myStatsHandler) HandleConn(ctx context.Context, stat stats.ConnStats) {
 	switch stat.(type) {
 	case *stats.ConnBegin:
 	case *stats.ConnEnd:
-		log.Infof("gRPC connection ended. Remaining open RPCs: %v", atomic.LoadInt32(&m.openRPCs))
+		log.Info().Msgf("gRPC connection ended. Remaining open RPCs: %v", atomic.LoadInt32(&m.openRPCs))
 	default:
 	}
 }

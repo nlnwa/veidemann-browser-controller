@@ -21,7 +21,7 @@ import (
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/serviceconnections"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -59,7 +59,7 @@ func (r *robotsEvaluator) IsAllowed(ctx context.Context, request *robotsevaluato
 	request.Politeness = resolvedPoliteness
 	reply, err := r.RobotsEvaluatorClient.IsAllowed(ctx, request)
 	if err != nil {
-		log.Warnf("failed to get allowance from robotsEvaluator: %v", err)
+		log.Error().Err(err).Msg("failed to query robots evaluator")
 		return true
 	}
 
