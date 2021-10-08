@@ -19,8 +19,8 @@ package controller
 import (
 	"context"
 	"fmt"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/server"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
+	"github.com/nlnwa/veidemann-browser-controller/server"
+	"github.com/nlnwa/veidemann-browser-controller/session"
 	log "github.com/sirupsen/logrus"
 	"time"
 )

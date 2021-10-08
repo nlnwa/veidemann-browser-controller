@@ -26,8 +26,8 @@ import (
 	"github.com/chromedp/cdproto/security"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/requests"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/url"
+	"github.com/nlnwa/veidemann-browser-controller/requests"
+	"github.com/nlnwa/veidemann-browser-controller/url"
 	log "github.com/sirupsen/logrus"
 )
 

@@ -17,9 +17,9 @@
 package session
 
 import (
-	"github.com/nlnwa/veidemann-browser-controller/pkg/database"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/logwriter"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
+	"github.com/nlnwa/veidemann-browser-controller/database"
+	"github.com/nlnwa/veidemann-browser-controller/logwriter"
+	"github.com/nlnwa/veidemann-browser-controller/screenshotwriter"
 )
 
 // SessionOption configures Session Registry.

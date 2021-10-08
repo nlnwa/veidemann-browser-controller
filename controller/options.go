@@ -17,10 +17,10 @@
 package controller
 
 import (
-	"github.com/nlnwa/veidemann-browser-controller/pkg/harvester"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/logwriter"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/robotsevaluator"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/session"
+	"github.com/nlnwa/veidemann-browser-controller/harvester"
+	"github.com/nlnwa/veidemann-browser-controller/logwriter"
+	"github.com/nlnwa/veidemann-browser-controller/robotsevaluator"
+	"github.com/nlnwa/veidemann-browser-controller/session"
 	"time"
 )
 

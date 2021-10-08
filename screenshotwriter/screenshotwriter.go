@@ -23,7 +23,7 @@ import (
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	contentwriterV1 "github.com/nlnwa/veidemann-api/go/contentwriter/v1"
 	logV1 "github.com/nlnwa/veidemann-api/go/log/v1"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
+	"github.com/nlnwa/veidemann-browser-controller/serviceconnections"
 	log "github.com/sirupsen/logrus"
 )
 

@@ -19,7 +19,7 @@ package logwriter
 import (
 	"context"
 	logV1 "github.com/nlnwa/veidemann-api/go/log/v1"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/serviceconnections"
+	"github.com/nlnwa/veidemann-browser-controller/serviceconnections"
 	"github.com/nlnwa/veidemann-log-service/pkg/logservice"
 )
 

@@ -18,7 +18,7 @@ package testutil
 
 import (
 	"context"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/screenshotwriter"
+	"github.com/nlnwa/veidemann-browser-controller/screenshotwriter"
 )
 
 // ScreenshotWriterMock is a helper structure for mocking screenshotwriter.ScreenshotWriter

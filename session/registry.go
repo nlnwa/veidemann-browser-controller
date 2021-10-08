@@ -18,7 +18,7 @@ package session
 
 import (
 	"context"
-	"github.com/nlnwa/veidemann-browser-controller/pkg/metrics"
+	"github.com/nlnwa/veidemann-browser-controller/metrics"
 	log "github.com/sirupsen/logrus"
 	"sync"
 	"time"
