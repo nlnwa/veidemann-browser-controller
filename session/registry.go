@@ -63,6 +63,7 @@ func (sr *Registry) GetNextAvailable(ctx context.Context) (*Session, error) {
 	}
 	sr.wg.Add(1)
 	sr.sessions[i] = sess
+	metrics.ActiveBrowserSessions.Inc()
 	return sess, nil
 }
 
@@ -84,6 +85,7 @@ func (sr *Registry) Release(sess *Session) {
 	sr.sessions[sess.Id] = nil
 	sr.wg.Done()
 	sr.pool <- sess.Id
+	metrics.ActiveBrowserSessions.Dec()
 }
 
 func (sr *Registry) MaxSessions() int {

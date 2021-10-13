@@ -21,7 +21,7 @@ import (
 	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/nlnwa/veidemann-browser-controller/controller"
 	"github.com/nlnwa/veidemann-browser-controller/database"
-	"github.com/nlnwa/veidemann-browser-controller/harvester"
+	"github.com/nlnwa/veidemann-browser-controller/frontier"
 	"github.com/nlnwa/veidemann-browser-controller/logger"
 	"github.com/nlnwa/veidemann-browser-controller/logwriter"
 	"github.com/nlnwa/veidemann-browser-controller/metrics"
@@ -110,7 +110,7 @@ func main() {
 	defer func() {
 		if r := recover(); r != nil {
 			if err, ok := r.(error); ok {
-				log.Fatal().Err(err).Msg("Goodbye!")
+				log.Fatal().Err(err).Msg("Fatal error")
 			}
 		}
 	}()
@@ -140,18 +140,19 @@ func main() {
 	}
 	defer screenshotWriter.Close()
 
-	harvester := harvester.New(
+	frontier := frontier.New(
 		serviceconnections.WithConnectTimeout(connectTimeout),
 		serviceconnections.WithHost(viper.GetString("frontier-host")),
 		serviceconnections.WithPort(viper.GetInt("frontier-port")),
 		serviceconnections.WithDialOptions(
+			grpc.WithUnaryInterceptor(otgrpc.OpenTracingClientInterceptor(opentracing.GlobalTracer())),
 			grpc.WithStreamInterceptor(otgrpc.OpenTracingStreamClientInterceptor(opentracing.GlobalTracer())),
 		),
 	)
-	if err := harvester.Connect(); err != nil {
+	if err := frontier.Connect(); err != nil {
 		panic(err)
 	}
-	defer harvester.Close()
+	defer frontier.Close()
 
 	robotsEvaluator := robotsevaluator.New(
 		serviceconnections.WithConnectTimeout(connectTimeout),
@@ -196,7 +197,7 @@ func main() {
 		controller.WithListenInterface(viper.GetString("interface")),
 		controller.WithListenPort(viper.GetInt("port")),
 		controller.WithMaxConcurrentSessions(viper.GetInt("proxy-count")),
-		controller.WithHarvester(harvester),
+		controller.WithFrontier(frontier),
 		controller.WithRobotsEvaluator(robotsEvaluator),
 		controller.WithLogWriter(logWriter),
 		controller.WithSessionOptions(
@@ -213,7 +214,7 @@ func main() {
 	metricsServer := metrics.NewServer(viper.GetString("metrics-interface"), viper.GetInt("metrics-port"), viper.GetString("metrics-path"))
 	go func() {
 		if err := metricsServer.Start(); err != nil {
-			log.Error().Err(err).Msg("Metrics server error")
+			log.Error().Err(err).Msg("Metrics server failed")
 			browserController.Shutdown()
 		}
 	}()

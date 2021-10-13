@@ -17,7 +17,7 @@
 package controller
 
 import (
-	"github.com/nlnwa/veidemann-browser-controller/harvester"
+	"github.com/nlnwa/veidemann-browser-controller/frontier"
 	"github.com/nlnwa/veidemann-browser-controller/logwriter"
 	"github.com/nlnwa/veidemann-browser-controller/robotsevaluator"
 	"github.com/nlnwa/veidemann-browser-controller/session"
@@ -29,7 +29,7 @@ import (
 type browserControllerOptions struct {
 	listenInterface string
 	listenPort      int
-	harvester       harvester.Harvester
+	frontier        frontier.Frontier
 	robotsEvaluator robotsevaluator.RobotsEvaluator
 	logWriter       logwriter.LogWriter
 	sessionOpts     []session.Option
@@ -79,9 +79,9 @@ func WithListenPort(port int) BrowserControllerOption {
 	})
 }
 
-func WithHarvester(harvester harvester.Harvester) BrowserControllerOption {
+func WithFrontier(frontier frontier.Frontier) BrowserControllerOption {
 	return newFuncBrowserControllerOption(func(c *browserControllerOptions) {
-		c.harvester = harvester
+		c.frontier = frontier
 	})
 }
 
