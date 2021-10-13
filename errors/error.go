@@ -22,8 +22,8 @@ import (
 )
 
 type FetchError interface {
+	error
 	CommonsError() *commonsV1.Error
-	Error() string
 }
 
 func New(code int32, msg, detail string) FetchError {
