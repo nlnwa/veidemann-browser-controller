@@ -12,7 +12,7 @@ require (
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
 	github.com/mailru/easyjson v0.7.2
 	github.com/mitchellh/mapstructure v1.3.3 // indirect
-	github.com/nlnwa/veidemann-api/go v0.0.0-20210413093311-7ff38e848604
+	github.com/nlnwa/veidemann-api/go v0.0.0-20211008092321-7fbcd3a6ae1a
 	github.com/nlnwa/veidemann-log-service v0.1.6
 	github.com/nlnwa/veidemann-recorderproxy v0.3.0
 	github.com/nlnwa/whatwg-url v0.1.0
@@ -30,7 +30,7 @@ require (
 	github.com/uber/jaeger-client-go v2.27.0+incompatible
 	go.uber.org/atomic v1.6.0 // indirect
 	google.golang.org/grpc v1.33.2
-	google.golang.org/protobuf v1.26.0
+	google.golang.org/protobuf v1.27.1
 	gopkg.in/ini.v1 v1.57.0 // indirect
 	gopkg.in/rethinkdb/rethinkdb-go.v6 v6.2.1
 )
