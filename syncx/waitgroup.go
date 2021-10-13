@@ -54,15 +54,13 @@ func (wg *WaitGroup) Wait() (err error) {
 	if atomic.LoadInt32(&wg.counter) == 0 {
 		return nil
 	}
-	for {
-		select {
-		case <-wg.ctx.Done():
-			return ExceededMaxTime
-		case <-wg.done:
-			return nil
-		case <-wg.cancel:
-			return Cancelled
-		}
+	select {
+	case <-wg.ctx.Done():
+		return ExceededMaxTime
+	case <-wg.done:
+		return nil
+	case <-wg.cancel:
+		return Cancelled
 	}
 }
 
