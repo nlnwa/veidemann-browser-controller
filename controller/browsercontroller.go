@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"github.com/nlnwa/veidemann-browser-controller/metrics"
 	"github.com/nlnwa/veidemann-browser-controller/server"
 	"github.com/nlnwa/veidemann-browser-controller/session"
 	"github.com/rs/zerolog/log"
@@ -60,7 +61,11 @@ func (bc *BrowserController) Run() error {
 	}()
 	defer apiServer.Close()
 
-	defer sessions.CloseWait(bc.opts.closeTimeout)
+	defer func () {
+		sessions.CloseWait(bc.opts.closeTimeout)
+		metrics.ActiveBrowserSessions.Set(0)
+		metrics.BrowserSessions.Set(0)
+	}()
 
 	// give api server time to start
 	time.Sleep(time.Millisecond)
@@ -102,11 +107,14 @@ func (bc *BrowserController) Run() error {
 				return fmt.Errorf("failed to get next page: %w", err)
 			}
 
+
 			// fetch and report
 			go func() {
 				sess := sess
 				phs := phs
 				defer sessions.Release(sess)
+				metrics.ActiveBrowserSessions.Inc()
+				defer metrics.ActiveBrowserSessions.Dec()
 
 				result, fetchErr := sess.Fetch(ctx, phs)
 				if err := bc.opts.frontier.PageCompleted(phs, result, fetchErr); err != nil {
