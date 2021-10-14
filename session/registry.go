@@ -112,11 +112,9 @@ func (sr *Registry) CloseWait(timeout time.Duration) {
 	select {
 	case <-c:
 		log.Debug().Msg("All sessions finished")
-		metrics.ActiveBrowserSessions.Set(0)
-		metrics.BrowserSessions.Set(0)
 	case <-time.After(timeout):
 		log.Warn().Msgf("Timed out waiting for %d sessions to finish.", sr.CurrentSessions())
-		metrics.ActiveBrowserSessions.Set(0)
-		metrics.BrowserSessions.Set(0)
 	}
+	metrics.ActiveBrowserSessions.Set(0)
+	metrics.BrowserSessions.Set(0)
 }

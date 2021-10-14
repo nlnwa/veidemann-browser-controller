@@ -35,7 +35,7 @@ type BrowserController struct {
 func New(opts ...BrowserControllerOption) *BrowserController {
 	bc := &BrowserController{
 		opts: defaultBrowserControllerOptions(),
-		done: make(chan error),
+		done: make(chan error, 1),
 	}
 	for _, opt := range opts {
 		opt.apply(&bc.opts)
@@ -54,8 +54,8 @@ func (bc *BrowserController) Run() error {
 	apiServer := server.NewApiServer(bc.opts.listenInterface, bc.opts.listenPort, sessions, bc.opts.robotsEvaluator, bc.opts.logWriter)
 	go func() {
 		if err := apiServer.Start(); err != nil {
-			cancel()
 			bc.done <- fmt.Errorf("API server stopped: %w", err)
+			cancel()
 		}
 	}()
 	defer apiServer.Close()
@@ -72,9 +72,9 @@ func (bc *BrowserController) Run() error {
 		select {
 		case err := <-bc.done:
 			return err
-		case t := <-backoff:
-			d := time.Now().Sub(t.Add(10 * time.Second))
-			log.Debug().Dur("backoff", d).Msg("Next page not found, backing off..")
+		case <-backoff:
+			d := 10 * time.Second
+			log.Debug().Dur("durationMs", d).Msg("Next page not found, backing off..")
 			time.Sleep(d)
 		default:
 			// get session
@@ -91,6 +91,7 @@ func (bc *BrowserController) Run() error {
 			// get a page to fetch
 			phs, err := bc.opts.frontier.GetNextPage(ctx)
 			if err != nil {
+				sessions.Release(sess)
 				if st, ok := status.FromError(err); ok {
 					switch st.Code() {
 					case codes.NotFound:
