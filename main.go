@@ -43,13 +43,6 @@ import (
 )
 
 func main() {
-	// init logger
-	logger.InitLog(
-		viper.GetString("log-level"),
-		viper.GetString("log-formatter"),
-		viper.GetBool("log-method"),
-	)
-
 	pflag.BoolP("help", "h", false, "Usage instructions")
 	pflag.String("interface", "", "interface the browser controller api listens to. No value means all interfaces.")
 	pflag.Int("port", 8080, "port the browser controller api listens to.")
@@ -114,6 +107,13 @@ func main() {
 			}
 		}
 	}()
+
+	// init logger
+	logger.InitLog(
+		viper.GetString("log-level"),
+		viper.GetString("log-formatter"),
+		viper.GetBool("log-method"),
+	)
 
 	log.Info().Msg("Browser Controller starting...")
 	defer func() {
