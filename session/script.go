@@ -108,6 +108,10 @@ func (sess *Session) GetReplacementScript(uri string) *configV1.BrowserScript {
 
 // executeScripts executes scripts of type scriptType.
 func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.BrowserScript_BrowserScriptType) error {
+	span, ctx := opentracing.StartSpanFromContext(ctx, "execute-scripts")
+	defer span.Finish()
+	span.SetTag("scriptType", scriptType)
+
 	// wait is executed depending on value returned from script (WaitForData)
 	wait := func() {
 		waitStart := time.Now()
@@ -174,7 +178,7 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 }
 
 // callScript runs a script function in the given execution context using the
-// provided arguments  by the chrome debug protocol.
+// provided arguments via chrome debug protocol.
 //
 // The result value from the debug protocol action is unmarshalled into a
 // ReturnValue struct.

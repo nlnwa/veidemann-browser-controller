@@ -186,7 +186,12 @@ func TestSession_Fetch(t *testing.T) {
 			if err != nil {
 				t.Error(err)
 			}
-			result, err := s.Fetch(context.Background(), tt.url, conf)
+			phs := &frontierV1.PageHarvestSpec{
+				QueuedUri:    tt.url,
+				CrawlConfig:  conf,
+				SessionToken: "test",
+			}
+			result, err := s.Fetch(context.Background(), phs)
 			if err != nil {
 				t.Error(err)
 			} else {

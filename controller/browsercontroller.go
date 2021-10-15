@@ -19,25 +19,24 @@ package controller
 import (
 	"context"
 	"fmt"
+	"github.com/nlnwa/veidemann-browser-controller/metrics"
 	"github.com/nlnwa/veidemann-browser-controller/server"
 	"github.com/nlnwa/veidemann-browser-controller/session"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"time"
 )
 
 type BrowserController struct {
-	opts   browserControllerOptions
-	ctx    context.Context
-	cancel func()
+	opts browserControllerOptions
+	done chan error
 }
 
 func New(opts ...BrowserControllerOption) *BrowserController {
-	ctx, cancel := context.WithCancel(context.Background())
-
 	bc := &BrowserController{
-		opts:   defaultBrowserControllerOptions(),
-		cancel: cancel,
-		ctx:    ctx,
+		opts: defaultBrowserControllerOptions(),
+		done: make(chan error, 1),
 	}
 	for _, opt := range opts {
 		opt.apply(&bc.opts)
@@ -45,44 +44,81 @@ func New(opts ...BrowserControllerOption) *BrowserController {
 	return bc
 }
 
-func (bc *BrowserController) Run() (err error) {
+func (bc *BrowserController) Run() error {
 	sessions := session.NewRegistry(
 		bc.opts.maxSessions,
 		bc.opts.sessionOpts...,
 	)
 
+	// ctx is used to signal (via cancellation) if the api server stops unexpectedly
+	ctx, cancel := context.WithCancel(context.Background())
 	apiServer := server.NewApiServer(bc.opts.listenInterface, bc.opts.listenPort, sessions, bc.opts.robotsEvaluator, bc.opts.logWriter)
 	go func() {
-		err = apiServer.Start()
-		if err != nil {
-			err = fmt.Errorf("API server failed: %w", err)
-			bc.cancel()
+		if err := apiServer.Start(); err != nil {
+			bc.done <- fmt.Errorf("API server stopped: %w", err)
+			cancel()
 		}
 	}()
 	defer apiServer.Close()
 
-	defer sessions.CloseWait(bc.opts.closeTimeout)
+	defer func () {
+		sessions.CloseWait(bc.opts.closeTimeout)
+		metrics.ActiveBrowserSessions.Set(0)
+		metrics.BrowserSessions.Set(0)
+	}()
 
 	// give api server time to start
 	time.Sleep(time.Millisecond)
 
 	log.Info().Msg("Browser Controller started")
+
+	backoff := make(chan time.Time, 1)
 	for {
 		select {
-		case <-bc.ctx.Done():
-			return
+		case err := <-bc.done:
+			return err
+		case <-backoff:
+			d := 10 * time.Second
+			log.Debug().Dur("durationMs", d).Msg("Next page not found, backing off..")
+			time.Sleep(d)
 		default:
-			sess, err := sessions.GetNextAvailable(bc.ctx)
+			// get session
+			sess, err := sessions.GetNextAvailable(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to get session: %w", err)
-			}
-			go func() {
-				if err := bc.opts.harvester.Harvest(bc.ctx, sess.Fetch); err != nil {
-					log.Warn().Err(err).Int("session", sess.Id).Msg("Harvest error")
-					time.Sleep(time.Second) // delay release of session after error
+				switch err {
+				case context.Canceled:
+					continue
+				default:
+					return fmt.Errorf("failed to get next session: %w", err)
 				}
-				if sess != nil {
-					sessions.Release(sess)
+			}
+
+			// get a page to fetch
+			phs, err := bc.opts.frontier.GetNextPage(ctx)
+			if err != nil {
+				sessions.Release(sess)
+				if st, ok := status.FromError(err); ok {
+					switch st.Code() {
+					case codes.NotFound:
+						backoff <- time.Now()
+						continue
+					}
+				}
+				return fmt.Errorf("failed to get next page: %w", err)
+			}
+
+
+			// fetch and report
+			go func() {
+				sess := sess
+				phs := phs
+				defer sessions.Release(sess)
+				metrics.ActiveBrowserSessions.Inc()
+				defer metrics.ActiveBrowserSessions.Dec()
+
+				result, fetchErr := sess.Fetch(ctx, phs)
+				if err := bc.opts.frontier.PageCompleted(phs, result, fetchErr); err != nil {
+					log.Error().Err(err).Msg("Error reporting page completed")
 				}
 			}()
 		}
@@ -91,5 +127,5 @@ func (bc *BrowserController) Run() (err error) {
 
 func (bc *BrowserController) Shutdown() {
 	log.Info().Msg("Shutting down Browser Controller...")
-	bc.cancel()
+	bc.done <- nil
 }

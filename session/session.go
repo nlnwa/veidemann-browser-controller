@@ -37,13 +37,14 @@ import (
 	logV1 "github.com/nlnwa/veidemann-api/go/log/v1"
 	"github.com/nlnwa/veidemann-browser-controller/database"
 	"github.com/nlnwa/veidemann-browser-controller/errors"
-	"github.com/nlnwa/veidemann-browser-controller/harvester"
+	"github.com/nlnwa/veidemann-browser-controller/frontier"
 	"github.com/nlnwa/veidemann-browser-controller/logwriter"
 	"github.com/nlnwa/veidemann-browser-controller/requests"
 	"github.com/nlnwa/veidemann-browser-controller/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/syncx"
 	"github.com/nlnwa/whatwg-url/url"
 	"github.com/opentracing/opentracing-go"
+	tracelog "github.com/opentracing/opentracing-go/log"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
@@ -174,11 +175,19 @@ func (sess *Session) Context() context.Context {
 	return sess.ctx
 }
 
-func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, crawlConf *configV1.ConfigObject) (result *harvester.RenderResult, err error) {
+func (sess *Session) Fetch(ctx context.Context, phs *frontierV1.PageHarvestSpec) (result *frontier.RenderResult, err error) {
+	span, ctx := opentracing.StartSpanFromContext(ctx, "fetch")
+	defer span.Finish()
+
+	span.SetTag("eid", phs.GetQueuedUri().GetExecutionId()).
+		SetTag("jeid", phs.GetQueuedUri().GetJobExecutionId()).
+		LogFields(
+			tracelog.String("uri", phs.GetQueuedUri().GetUri()),
+			tracelog.String("seed", phs.GetQueuedUri().GetSeedUri()),
+		)
 	log := sess.logger.With().
-		Str("uri", QUri.Uri).
-		Str("eid", QUri.ExecutionId).
-		Str("jid", QUri.JobExecutionId).
+		Str("uri", phs.GetQueuedUri().GetUri()).
+		Str("eid", phs.GetQueuedUri().GetExecutionId()).
 		Logger()
 
 	// Ensure that bugs in implementation is logged and handled
@@ -193,22 +202,15 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 			default:
 				fetchError = errors.New(-5, "Runtime error", fmt.Sprintf("%s", v))
 			}
-			log.Error().Err(fetchError).Msg("Recovered from fetch panic")
-
 			// Add stacktrace to error
 			fetchError.CommonsError().Detail += "\n" + string(debug.Stack())
 			err = fetchError
 		}
 	}()
 
-	var span opentracing.Span
-	span, ctx = opentracing.StartSpanFromContext(ctx, "session",
-		opentracing.Tag{Key: "session.id", Value: sess.Id})
-	defer span.Finish()
-
 	log.Debug().Msg("Start fetch")
-	sess.RequestedUrl = QUri
-	sess.CrawlConfig = crawlConf.GetCrawlConfig()
+	sess.RequestedUrl = phs.GetQueuedUri()
+	sess.CrawlConfig = phs.GetCrawlConfig().GetCrawlConfig()
 
 	bConf, err := sess.configCache.GetConfigObject(ctx, sess.CrawlConfig.BrowserConfigRef)
 	if err != nil {
@@ -247,9 +249,8 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 			return err
 		}),
 	); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to start browser: %w", err)
 	}
-	span.SetTag("fetch.user_agent", userAgent)
 
 	var loadCtx context.Context
 	loadCtx, sess.loadCancel = context.WithTimeout(sess.ctx, maxTotalTime)
@@ -330,25 +331,28 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 
 	// Wait for frames to finish loading
 	err = sess.frameWg.Wait()
-	if err == syncx.Cancelled && sess.Requests.InitialRequest().FromCache {
-		return nil, errors.New(-4100, "Already seen", "Initial request was found in cache. Url: "+sess.RequestedUrl.Uri)
-	} else if err == syncx.ExceededMaxTime && (sess.Requests.InitialRequest() == nil || sess.Requests.InitialRequest().CrawlLog == nil) {
-		return nil, errors.New(-5004, "Runtime exceeded", "Pageload timed out. Url: "+sess.RequestedUrl.Uri)
-	} else if err == syncx.IdleTimeout && (sess.Requests.InitialRequest() == nil || sess.Requests.InitialRequest().CrawlLog == nil) {
-		return nil, errors.New(-4, "Http timeout", "Idle time out. Url: "+sess.RequestedUrl.Uri)
+	switch err {
+	case syncx.Cancelled:
+		if sess.Requests.InitialRequest().FromCache {
+			return nil, errors.New(-4100, "Already seen", "Initial request was found in cache. Url: "+sess.RequestedUrl.Uri)
+		}
+	case syncx.ExceededMaxTime:
+		if sess.Requests.InitialRequest() == nil || sess.Requests.InitialRequest().CrawlLog == nil {
+			return nil, errors.New(-5004, "Runtime exceeded", "Pageload timed out. Url: "+sess.RequestedUrl.Uri)
+		}
 	}
 
 	// Wait for all outstanding requests to receive a response
 	err = sess.timer.WaitForCompletion()
 	if err != nil {
-		log.Warn().Err(err).Msg("Session timer")
+		log.Warn().Err(err).Msg("Fetch timed out")
 	}
 
 	fetchDuration := time.Since(fetchStart)
 
 	sess.Requests.FinalizeResponses(sess.RequestedUrl)
 
-	if sess.CrawlConfig.Extra.CreateScreenshot {
+	if sess.CrawlConfig.GetExtra().CreateScreenshot {
 		sess.saveScreenshot()
 	}
 	outlinks := sess.extractOutlinks()
@@ -436,7 +440,7 @@ func (sess *Session) Fetch(ctx context.Context, QUri *frontierV1.QueuedUri, craw
 			JobExecutionId:      sess.RequestedUrl.JobExecutionId,
 		}
 	}
-	result = &harvester.RenderResult{
+	result = &frontier.RenderResult{
 		BytesDownloaded: bytesDownloaded,
 		UriCount:        crawlLogCount,
 		Outlinks:        qUris,
