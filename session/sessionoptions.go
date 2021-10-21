@@ -22,7 +22,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/screenshotwriter"
 )
 
-// SessionOption configures Session Registry.
+// Option configures session Registry.
 type Option interface {
 	apply(*Session)
 }
