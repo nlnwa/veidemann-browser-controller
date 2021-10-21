@@ -546,7 +546,11 @@ func (sess *Session) saveScreenshot() {
 		log.Debug().Str("resourceType", sess.Requests.RootRequest().ResourceType).Msgf("Skipping screenshot: missing crawlLog")
 		return
 	}
-
+	// Check if CrawlLog has WarcId
+	if sess.Requests.RootRequest().CrawlLog.WarcId == "" {
+		log.Debug().Str("resourceType", sess.Requests.RootRequest().ResourceType).Msgf("Skipping screenshot: crawlLog has empty warcId")
+		return
+	}
 	var data []byte
 	err := chromedp.Run(ctx,
 		chromedp.ActionFunc(func(ctx context.Context) (err error) {
