@@ -622,10 +622,7 @@ func (sess *Session) extractOutlinks() []string {
 }
 
 func (sess *Session) AbortFetch() error {
-	if err := chromedp.Run(sess.ctx, page.StopLoading()); err != nil {
-		return err
-	}
-	sess.frameWg.Cancel()
-	sess.loadCancel()
-	return nil
+	defer sess.loadCancel()
+	defer sess.frameWg.Cancel()
+	return chromedp.Run(sess.ctx, page.StopLoading())
 }
