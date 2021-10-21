@@ -28,7 +28,7 @@ import (
 	"github.com/nlnwa/veidemann-browser-controller/url"
 	"github.com/opentracing/opentracing-go"
 	tracelog "github.com/opentracing/opentracing-go/log"
-	"github.com/rs/zerolog/log"
+	zlog "github.com/rs/zerolog/log"
 	"regexp"
 	"time"
 )
@@ -72,8 +72,7 @@ func (sess *Session) loadScripts(ctx context.Context) (*sessionScripts, error) {
 		if bs.IsBlacklisted(scriptType) {
 			continue
 		}
-		urlRegex := s.GetBrowserScript().GetUrlRegexp()
-		if !match(urlRegex, sess.RequestedUrl.Uri) {
+		if !match(s.GetBrowserScript().GetUrlRegexp(), sess.RequestedUrl.Uri) {
 			continue
 		}
 		bs.scripts[scriptType] = append(bs.scripts[scriptType], s)
@@ -82,6 +81,8 @@ func (sess *Session) loadScripts(ctx context.Context) (*sessionScripts, error) {
 }
 
 func (sess *Session) GetReplacementScript(uri string) *configV1.BrowserScript {
+	log := sess.logger
+
 	replacements := sess.scripts.Get(configV1.BrowserScript_REPLACEMENT)
 	if len(replacements) == 0 {
 		return nil
@@ -111,6 +112,10 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 	span, ctx := opentracing.StartSpanFromContext(ctx, "execute-scripts")
 	defer span.Finish()
 	span.SetTag("scriptType", scriptType)
+
+	log := sess.logger.With().
+		Str("scriptType", scriptType.String()).
+		Logger()
 
 	// wait is executed depending on value returned from script (WaitForData)
 	wait := func() {
@@ -142,7 +147,7 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 	}
 
 	execute := func(configObject *configV1.ConfigObject, arguments easyjson.RawMessage) (easyjson.RawMessage, error) {
-		span, ctx := opentracing.StartSpanFromContext(ctx, "execute script")
+		span, ctx := opentracing.StartSpanFromContext(ctx, "execute-script")
 		defer span.Finish()
 		name := configObject.GetMeta().GetName()
 		id := configObject.GetId()
@@ -151,14 +156,21 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 			span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 			return nil, fmt.Errorf("failed to resolve execution context id for script %s (%s): %w", name, id, err)
 		}
-		span.SetTag("script.name", name).SetTag("script.id", id).SetTag("script.eci", eci)
-		log.Debug().Msgf("Calling script %s (%s) in context %d with arguments %s", name, id, eci, arguments)
+
+		span.SetTag("script.id", id)
+		log := log.With().
+			Str("scriptName", name).
+			Str("scriptId", id).
+			Int64("scriptEci", int64(eci)).
+			Logger()
+
+		log.Debug().Msgf("Calling script %s: %s", name, arguments)
 
 		res, err := callScript(ctx, eci, configObject.GetBrowserScript().GetScript(), arguments)
 		if err != nil {
 			span.SetTag("error", true).LogFields(tracelog.Event("error"), tracelog.Error(err))
 		}
-		log.Debug().Msgf("Script %s (%s) returned: %s", name, id, res)
+		log.Debug().Msgf("Script %s returned: %s", name, string(res))
 
 		return res, err
 	}
@@ -243,7 +255,7 @@ func getFrameTree(ctx context.Context) (*page.FrameTree, error) {
 	return frameTree, nil
 }
 
-// match takes an array of regular expressions and an URI. It returns true if
+// match takes an array of regular expressions and a URI. It returns true if
 // a normalized version of the URI matches any of the regular expressions or
 // if the array of regular expressions is empty, and false otherwise.
 func match(regExps []string, uri string) bool {
@@ -251,17 +263,15 @@ func match(regExps []string, uri string) bool {
 		return true
 	}
 	normalizedUri := url.Normalize(uri)
-	match := false
 	for _, urlRegexp := range regExps {
 		re, err := regexp.Compile(urlRegexp)
 		if err != nil {
-			log.Warn().Msgf("Failed to compile regexp [%s]", urlRegexp)
+			zlog.Error().Msgf("Failed to compile regular expression: %s", urlRegexp)
 			continue
 		}
-		match = re.MatchString(normalizedUri)
-		if match {
-			break
+		if match := re.MatchString(normalizedUri); match {
+			return true
 		}
 	}
-	return match
+	return false
 }
