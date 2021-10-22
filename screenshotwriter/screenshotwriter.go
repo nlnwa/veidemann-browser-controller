@@ -100,6 +100,7 @@ func (s *screenshotWriter) Write(ctx context.Context, data []byte, metadata Meta
 		Type:              contentwriterV1.RecordType_RESOURCE,
 		RecordContentType: "image/png",
 		BlockDigest:       digest,
+		PayloadDigest:     digest,
 		Size:              int64(len(data)),
 		SubCollection:     configV1.Collection_SCREENSHOT,
 		WarcConcurrentTo:  []string{metadata.CrawlLog.WarcId},
