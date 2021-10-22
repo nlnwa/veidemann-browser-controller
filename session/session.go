@@ -46,7 +46,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	tracelog "github.com/opentracing/opentracing-go/log"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
+	zlog "github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -103,7 +103,7 @@ func newDefaultSession(opts ...Option) *Session {
 func New(sessionId int, opts ...Option) (*Session, error) {
 	s := newDefaultSession(opts...)
 	s.Id = sessionId
-	s.logger = log.Logger.With().Int("session", sessionId).Logger()
+	s.logger = zlog.Logger.With().Int("session", sessionId).Logger()
 
 	ws, err := url.Parse("ws://" + s.browserHost + ":" + strconv.Itoa(s.browserPort))
 	if err != nil {
@@ -134,7 +134,7 @@ func newDirectSession(uri, crawlExecutionId, jobExecutionId string, opts ...Opti
 	sess := newDefaultSession(opts...)
 	sess.Id = 0
 
-	sess.logger = log.Logger.With().
+	sess.logger = zlog.Logger.With().
 		Str("uri", uri).
 		Str("eid", crawlExecutionId).
 		Str("jid", jobExecutionId).
@@ -154,6 +154,7 @@ func newDirectSession(uri, crawlExecutionId, jobExecutionId string, opts ...Opti
 
 func (sess *Session) Notify(reqId string) error {
 	log := sess.logger
+
 	if reqId == "" {
 		log.Warn().Msg("Received notify with empty request ID")
 	}
@@ -185,10 +186,11 @@ func (sess *Session) Fetch(ctx context.Context, phs *frontierV1.PageHarvestSpec)
 			tracelog.String("uri", phs.GetQueuedUri().GetUri()),
 			tracelog.String("seed", phs.GetQueuedUri().GetSeedUri()),
 		)
-	log := sess.logger.With().
+	sess.logger = sess.logger.With().
 		Str("uri", phs.GetQueuedUri().GetUri()).
 		Str("eid", phs.GetQueuedUri().GetExecutionId()).
 		Logger()
+	log := sess.logger
 
 	// Ensure that bugs in implementation is logged and handled
 	defer func() {
@@ -454,6 +456,8 @@ func (sess *Session) Fetch(ctx context.Context, phs *frontierV1.PageHarvestSpec)
 
 // cleanWorkspace removes downloaded resources in browser container
 func (sess *Session) cleanWorkspace() {
+	log := sess.logger
+
 	if r, err := http.NewRequest("DELETE", sess.workspaceEndpoint+"/"+strconv.Itoa(sess.Id), nil); err != nil {
 		log.Warn().Err(err).Msg("Error creating request for cleaning up workspace")
 	} else {
@@ -464,6 +468,8 @@ func (sess *Session) cleanWorkspace() {
 }
 
 func (sess *Session) getCookieParams(uri *frontierV1.QueuedUri) []*network.CookieParam {
+	log := sess.logger
+
 	log.Debug().Msgf("Restoring %v browser cookies", len(uri.GetCookies()))
 	cookies := make([]*network.CookieParam, len(uri.GetCookies()))
 	for i, c := range uri.GetCookies() {
@@ -486,6 +492,7 @@ func (sess *Session) getCookieParams(uri *frontierV1.QueuedUri) []*network.Cooki
 }
 
 func (sess *Session) extractCookies() []*frontierV1.Cookie {
+	log := sess.logger
 	var result []*frontierV1.Cookie
 
 	if err := chromedp.Run(sess.ctx,
@@ -520,26 +527,30 @@ func (sess *Session) extractCookies() []*frontierV1.Cookie {
 }
 
 func (sess *Session) saveScreenshot() {
-	span, ctx := opentracing.StartSpanFromContext(sess.ctx, "save screenshot")
+	log := sess.logger
+
+	span, ctx := opentracing.StartSpanFromContext(sess.ctx, "screenshot")
 	defer span.Finish()
 	// Skip screenshot of pages loaded from cache
 	if sess.Requests.RootRequest().FromCache {
-		log.Debug().Msgf("Page with resource type [%v] is from cache, skipping screenshot", sess.Requests.RootRequest().ResourceType)
+		log.Debug().Str("resourceType", sess.Requests.RootRequest().ResourceType).Msgf("Skipping screenshot: from cache")
 		return
 	}
-
 	// Check if page is renderable
 	if sess.Requests.RootRequest().ResourceType != "Document" && sess.Requests.RootRequest().ResourceType != "Image" {
-		log.Debug().Msgf("Page with resource type %v is not renderable, skipping screenshot", sess.Requests.RootRequest().ResourceType)
+		log.Debug().Str("resourceType", sess.Requests.RootRequest().ResourceType).Msgf("Skipping screenshot: not renderable")
 		return
 	}
-
 	// Check if CrawlLog is present for root request
 	if sess.Requests.RootRequest().CrawlLog == nil {
-		log.Debug().Msgf("Page with resource type %v is missing crawlLog for root request, skipping screenshot", sess.Requests.RootRequest().ResourceType)
+		log.Debug().Str("resourceType", sess.Requests.RootRequest().ResourceType).Msgf("Skipping screenshot: missing crawlLog")
 		return
 	}
-
+	// Check if CrawlLog has WarcId
+	if sess.Requests.RootRequest().CrawlLog.WarcId == "" {
+		log.Debug().Str("resourceType", sess.Requests.RootRequest().ResourceType).Msgf("Skipping screenshot: crawlLog has empty warcId")
+		return
+	}
 	var data []byte
 	err := chromedp.Run(ctx,
 		chromedp.ActionFunc(func(ctx context.Context) (err error) {
@@ -564,11 +575,14 @@ func (sess *Session) saveScreenshot() {
 }
 
 func (sess *Session) extractOutlinks() []string {
-	log := sess.logger
-
 	var extractedUrls []string
 
 	for _, s := range sess.scripts.Get(configV1.BrowserScript_EXTRACT_OUTLINKS) {
+		log := sess.logger.With().
+			Str("scriptType", configV1.BrowserScript_EXTRACT_OUTLINKS.String()).
+			Str("scriptId", s.GetId()).
+			Logger()
+
 		var res *runtime.RemoteObject
 		var exceptionDetails *runtime.ExceptionDetails
 		err := chromedp.Run(sess.ctx,
@@ -579,18 +593,18 @@ func (sess *Session) extractOutlinks() []string {
 			}),
 		)
 		if err != nil {
-			log.Warn().Msgf("Failed to evaluate link extractor script: %v", err)
+			log.Warn().Err(err).Msgf("Failed to evaluate script")
 			continue
 		}
 		if exceptionDetails != nil {
-			log.Warn().Msgf("Exception during evaluation of link extractor script: %v", exceptionDetails)
+			log.Warn().Err(exceptionDetails).Msgf("Exception during script evaluation")
 			continue
 		}
 		if res.Value != nil {
 			var links []string
 			err := json.Unmarshal(res.Value, &links)
 			if err != nil {
-				log.Warn().Msgf("Failed to unmarshal return value from link extractor script: %v", err)
+				log.Warn().Err(err).Msgf("Failed to unmarshal return value")
 				continue
 			}
 
@@ -608,10 +622,7 @@ func (sess *Session) extractOutlinks() []string {
 }
 
 func (sess *Session) AbortFetch() error {
-	if err := chromedp.Run(sess.ctx, page.StopLoading()); err != nil {
-		return err
-	}
-	sess.frameWg.Cancel()
-	sess.loadCancel()
-	return nil
+	defer sess.loadCancel()
+	defer sess.frameWg.Cancel()
+	return chromedp.Run(sess.ctx, page.StopLoading())
 }
