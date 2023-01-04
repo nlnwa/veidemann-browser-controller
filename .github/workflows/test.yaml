@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   unit_test:
     name: Golang unit tests
@@ -13,21 +17,34 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
-
-      - uses: actions/setup-go@v2
+        uses: actions/checkout@v3
+      - uses: actions/setup-go@v4
         with:
-          go-version: '^1.16'
-
-      - name: Cache go modules
-        uses: actions/cache@v2
+          go-version: '^1.19'
+          cache: true
+      - run: go test ./...
+  build_container:
+    name: Build container image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract metadata (tags, labels) and establish version
+        id: meta
+        uses: docker/metadata-action@v4
         with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
 
-      - name: Run tests
-        run: go test ./...
+      - name: Log in to the container registry (${{ env.REGISTRY }})
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
