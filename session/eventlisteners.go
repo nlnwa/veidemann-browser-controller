@@ -28,7 +28,7 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/nlnwa/veidemann-browser-controller/requests"
 	"github.com/nlnwa/veidemann-browser-controller/url"
-	)
+)
 
 func (sess *Session) initListeners(ctx context.Context) {
 	chromedp.ListenTarget(ctx, sess.listenFunc(ctx))
@@ -56,8 +56,6 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 			sess.Requests.NotifyLoadFinished()
 		case *page.EventFileChooserOpened:
 			log.Warn().Msgf("File chooser opened: %v %v %v", ev.BackendNodeID, ev.FrameID, ev.Mode)
-		case *page.EventDownloadWillBegin:
-			log.Trace().Msgf("Download will begin: %v %v", ev.FrameID, ev.URL)
 		case *page.EventJavascriptDialogOpening:
 			log.Debug().Msgf("Javascript dialog opening %v", ev.Message)
 			go func() {
