@@ -18,9 +18,10 @@ package syncx
 
 import (
 	"errors"
-	"github.com/rs/zerolog/log"
 	"sync/atomic"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 var IdleTimeout = errors.New("idle timeout")
@@ -103,7 +104,7 @@ func (t *CompletionTimer) WaitForCompletion() (err error) {
 				if time.Now().After(t.idleTimeout) {
 					return IdleTimeout
 				} else {
-					t.idleTimer = time.NewTimer(t.idleTimeout.Sub(time.Now()))
+					t.idleTimer = time.NewTimer(time.Until(t.idleTimeout))
 				}
 			}
 		case <-t.doneChan:
