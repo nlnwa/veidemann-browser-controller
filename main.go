@@ -18,6 +18,12 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
 	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/nlnwa/veidemann-browser-controller/controller"
 	"github.com/nlnwa/veidemann-browser-controller/database"
@@ -35,11 +41,6 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
-	"os"
-	"os/signal"
-	"strings"
-	"syscall"
-	"time"
 )
 
 func main() {
@@ -221,7 +222,7 @@ func main() {
 	defer metricsServer.Close()
 
 	go func() {
-		signals := make(chan os.Signal)
+		signals := make(chan os.Signal, 2)
 		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 		sig := <-signals
 		log.Debug().Str("signal", sig.String()).Msg("Received signal")
