@@ -17,10 +17,11 @@
 package requests
 
 import (
+	"sync"
+
 	"github.com/nlnwa/veidemann-api/go/frontier/v1"
 	"github.com/nlnwa/veidemann-browser-controller/syncx"
 	"github.com/rs/zerolog/log"
-	"sync"
 )
 
 type RequestRegistry interface {
@@ -127,10 +128,7 @@ func (r *requestRegistry) MatchCrawlLogs() bool {
 				Msg("Found crawlLog")
 		}
 	}
-	if unresolved > 0 {
-		return false
-	}
-	return true
+	return unresolved == 0
 }
 
 func (r *requestRegistry) Walk(w func(*Request)) {
