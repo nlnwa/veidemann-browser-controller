@@ -19,6 +19,7 @@ package session
 import (
 	"context"
 	"fmt"
+
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
@@ -73,10 +74,8 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 			log.Trace().Msgf("Target created: %v :: %v :: %v :: %v :: %v :: %v :: %v\n", ev.TargetInfo.TargetID, ev.TargetInfo.OpenerID, ev.TargetInfo.BrowserContextID, ev.TargetInfo.Type, ev.TargetInfo.Title, ev.TargetInfo.URL, ev.TargetInfo.Attached)
 			newCtx, _ := chromedp.NewContext(ctx, chromedp.WithTargetID(ev.TargetInfo.TargetID))
 			go func() {
-				select {
-				case <-ctx.Done():
-					_ = chromedp.Cancel(newCtx)
-				}
+				<-ctx.Done()
+				_ = chromedp.Cancel(newCtx)
 			}()
 			if err := chromedp.Run(newCtx); err != nil {
 				log.Warn().Err(err).Msg("Failed connecting to new target")
