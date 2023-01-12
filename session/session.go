@@ -20,6 +20,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"net/http"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
@@ -50,12 +57,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"math"
-	"net/http"
-	"runtime/debug"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type Session struct {
@@ -458,12 +459,17 @@ func (sess *Session) Fetch(ctx context.Context, phs *frontierV1.PageHarvestSpec)
 func (sess *Session) cleanWorkspace() {
 	log := sess.logger
 
-	if r, err := http.NewRequest("DELETE", sess.workspaceEndpoint+"/"+strconv.Itoa(sess.Id), nil); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	r, err := http.NewRequestWithContext(ctx, "DELETE", sess.workspaceEndpoint+"/"+strconv.Itoa(sess.Id), nil)
+	if err != nil {
 		log.Warn().Err(err).Msg("Error creating request for cleaning up workspace")
+	}
+	if resp, err := http.DefaultClient.Do(r); err != nil {
+		log.Warn().Err(err).Msg("Error cleaning up workspace")
 	} else {
-		if _, err = http.DefaultClient.Do(r); err != nil {
-			log.Warn().Err(err).Msg("Error cleaning up workspace")
-		}
+		_ = resp.Body.Close()
 	}
 }
 
