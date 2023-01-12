@@ -19,9 +19,10 @@ package database
 import (
 	"context"
 	"fmt"
-	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	"strings"
 	"time"
+
+	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 )
 
 type ConfigCache interface {
@@ -98,9 +99,7 @@ func (cc *configCache) GetScripts(ctx context.Context, browserConfig *configV1.B
 		if err != nil {
 			return nil, fmt.Errorf("failed to get scripts by selector %s: %w", selector, err)
 		}
-		for _, config := range configs {
-			scripts = append(scripts, config)
-		}
+		scripts = append(scripts, configs...)
 	}
 	return scripts, nil
 }
