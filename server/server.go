@@ -20,6 +20,11 @@ import (
 	"context"
 	gerr "errors"
 	"fmt"
+	"io"
+	"net"
+	"runtime/debug"
+	"time"
+
 	browsercontrollerV1 "github.com/nlnwa/veidemann-api/go/browsercontroller/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/errors"
@@ -33,10 +38,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"io"
-	"net"
-	"runtime/debug"
-	"time"
 )
 
 // ApiServer is the gRPC api endpoint for the Browser Controller

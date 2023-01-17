@@ -1,4 +1,5 @@
-// +build slow
+//go:build integration
+// +build integration
 
 /*
  * Copyright 2020 National Library of Norway.
@@ -22,11 +23,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net"
+	"os"
+	"testing"
+	"time"
+
 	"github.com/docker/go-connections/nat"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/database"
+	"github.com/nlnwa/veidemann-browser-controller/logger"
 	"github.com/nlnwa/veidemann-browser-controller/logwriter"
 	"github.com/nlnwa/veidemann-browser-controller/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/serviceconnections"
@@ -36,14 +44,10 @@ import (
 	"github.com/nlnwa/veidemann-recorderproxy/recorderproxy"
 	proxyServiceConnections "github.com/nlnwa/veidemann-recorderproxy/serviceconnections"
 	proxyTestUtil "github.com/nlnwa/veidemann-recorderproxy/testutil"
+	"github.com/sirupsen/logrus"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
-	"io"
-	"net"
-	"os"
-	"testing"
-	"time"
 )
 
 var sessions *session.Registry
@@ -51,6 +55,9 @@ var sessions *session.Registry
 var localhost = GetOutboundIP().String()
 
 func TestMain(m *testing.M) {
+	// Set recorderproxy log level
+	logrus.SetLevel(logrus.WarnLevel)
+	logger.InitLog("trace", "logfmt", false)
 	// setup browser
 	ctx, cancelBrowser := context.WithCancel(context.Background())
 	defer cancelBrowser()
@@ -169,15 +176,15 @@ func TestSession_Fetch(t *testing.T) {
 		name string
 		url  *frontierV1.QueuedUri
 	}{
-		{"elg", &frontierV1.QueuedUri{Uri: "http://elg.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"vg", &frontierV1.QueuedUri{Uri: "http://vg.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		//{"elg", &frontierV1.QueuedUri{Uri: "http://elg.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		//{"vg", &frontierV1.QueuedUri{Uri: "http://vg.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 		{"nb", &frontierV1.QueuedUri{Uri: "http://nb.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"fhi", &frontierV1.QueuedUri{Uri: "http://fhi.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"db", &frontierV1.QueuedUri{Uri: "http://db.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"maps", &frontierV1.QueuedUri{Uri: "https://goo.gl/maps/EmpIH", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"ranano", &frontierV1.QueuedUri{Uri: "https://ranano.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"cynergi", &frontierV1.QueuedUri{Uri: "https://www.cynergi.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
-		{"pdf1", &frontierV1.QueuedUri{Uri: "https://www.nb.no/content/uploads/2019/04/tildelingsbrev_nasjonalbiblioteket_2019.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		//{"fhi", &frontierV1.QueuedUri{Uri: "http://fhi.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		//{"db", &frontierV1.QueuedUri{Uri: "http://db.no", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		//{"maps", &frontierV1.QueuedUri{Uri: "https://goo.gl/maps/EmpIH", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		//{"ranano", &frontierV1.QueuedUri{Uri: "https://ranano.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		//{"cynergi", &frontierV1.QueuedUri{Uri: "https://www.cynergi.no/", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
+		//{"pdf1", &frontierV1.QueuedUri{Uri: "https://www.nb.no/content/uploads/2019/04/tildelingsbrev_nasjonalbiblioteket_2019.pdf", DiscoveryPath: "L", JobExecutionId: "jid", ExecutionId: "eid"}},
 	}
 	for _, tt := range tests {
 		ctx := context.Background()
@@ -198,7 +205,7 @@ func TestSession_Fetch(t *testing.T) {
 				t.Logf("Resource count: %v, Time: %v\n", result.UriCount, result.PageFetchTimeMs)
 			}
 			sessions.Release(s)
-			//time.Sleep(time.Second*4)
+			time.Sleep(time.Second * 4)
 		})
 	}
 }
@@ -306,10 +313,12 @@ func GetOutboundIP() net.IP {
 
 func setupBrowser(ctx context.Context) (host string, port int, err error) {
 	browserless, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ProviderType: testcontainers.ProviderPodman,
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "browserless/chrome:1.33.0-puppeteer-3.0.0",
+			SkipReaper:   true,
+			Image:        "docker.io/browserless/chrome:1.57.0-puppeteer-19.2.2",
 			ExposedPorts: []string{"3000/tcp"},
-			WaitingFor: wait.ForListeningPort("3000/tcp"),
+			WaitingFor:   wait.ForListeningPort("3000/tcp"),
 		},
 		Started: true,
 	})

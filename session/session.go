@@ -110,6 +110,9 @@ func New(sessionId int, opts ...Option) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Browserless lets you control how chrome is started via query string parameters
+	// See https://www.browserless.io/docs/chrome-flags
 	query := ws.SearchParams()
 	if s.proxyHost != "" {
 		proxy := "http://" + s.proxyHost + ":" + strconv.Itoa(s.proxyPort+s.Id)
@@ -121,6 +124,8 @@ func New(sessionId int, opts ...Option) (*Session, error) {
 	query.Append("trackingId", strconv.Itoa(s.Id))
 
 	s.browserWsEndpoint = ws.String()
+
+	s.logger.Debug().Str("wsURL", s.browserWsEndpoint).Msg("")
 
 	work, err := url.Parse("http://" + s.browserHost + ":" + strconv.Itoa(s.browserPort) + "/workspace")
 	if err != nil {
@@ -221,6 +226,8 @@ func (sess *Session) Fetch(ctx context.Context, phs *frontierV1.PageHarvestSpec)
 	}
 	sess.browserConfig = bConf.GetBrowserConfig()
 
+	sess.UserAgent = sess.browserConfig.UserAgent
+
 	sess.PolitenessConfig, err = sess.configCache.GetConfigObject(ctx, sess.CrawlConfig.PolitenessRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get politeness config: %v", err)
@@ -235,7 +242,7 @@ func (sess *Session) Fetch(ctx context.Context, phs *frontierV1.PageHarvestSpec)
 		sess.scripts = scripts
 	}
 
-	allocatorContext, allocatorCancel := chromedp.NewRemoteAllocator(ctx, sess.browserWsEndpoint)
+	allocatorContext, allocatorCancel := chromedp.NewRemoteAllocator(ctx, sess.browserWsEndpoint, chromedp.NoModifyURL)
 	defer allocatorCancel()
 	defer sess.cleanWorkspace()
 
@@ -243,17 +250,6 @@ func (sess *Session) Fetch(ctx context.Context, phs *frontierV1.PageHarvestSpec)
 	cdpCtx, cdpCancel := chromedp.NewContext(allocatorContext)
 	defer cdpCancel()
 	sess.ctx = cdpCtx
-
-	// ensure the first tab is created
-	var userAgent string
-	if err := chromedp.Run(sess.ctx,
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			_, sess.browserVersion, _, userAgent, _, err = browser.GetVersion().Do(ctx)
-			return err
-		}),
-	); err != nil {
-		return nil, fmt.Errorf("failed to start browser: %w", err)
-	}
 
 	var loadCtx context.Context
 	loadCtx, sess.loadCancel = context.WithTimeout(sess.ctx, maxTotalTime)
@@ -267,28 +263,29 @@ func (sess *Session) Fetch(ctx context.Context, phs *frontierV1.PageHarvestSpec)
 	sess.netActivityTimer = syncx.NewCompletionTimer(1*time.Second, maxTotalTime, nil)
 	sess.timer = syncx.NewCompletionTimer(maxIdleTime, maxTotalTime, sess.Requests.MatchCrawlLogs)
 
-	sess.UserAgent = sess.browserConfig.UserAgent
-	if sess.UserAgent == "" {
-		sess.UserAgent = strings.ReplaceAll(userAgent, "HeadlessChrome", "Chrome")
-	}
-
-	deviceInfo := &device.Info{
-		Name:      "Desktop",
-		UserAgent: sess.UserAgent,
-		Width:     int64(sess.browserConfig.WindowWidth),
-		Height:    int64(sess.browserConfig.WindowHeight),
-		Scale:     1,
-		Landscape: false,
-		Mobile:    false,
-		Touch:     false,
-	}
-
 	// run task list
 	if err := chromedp.Run(sess.ctx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			var userAgent string
+			_, sess.browserVersion, _, userAgent, _, err = browser.GetVersion().Do(ctx)
+			if sess.UserAgent == "" {
+				sess.UserAgent = strings.ReplaceAll(userAgent, "HeadlessChrome", "Chrome")
+			}
+			return err
+		}),
 		security.SetIgnoreCertificateErrors(true),
 		network.SetCacheDisabled(true),
 		serviceworker.Enable(),
-		chromedp.Emulate(deviceInfo),
+		chromedp.Emulate(&device.Info{
+			Name:      "Desktop",
+			UserAgent: sess.UserAgent,
+			Width:     int64(sess.browserConfig.WindowWidth),
+			Height:    int64(sess.browserConfig.WindowHeight),
+			Scale:     1,
+			Landscape: false,
+			Mobile:    false,
+			Touch:     false,
+		}),
 		fetch.Enable(),
 		network.Enable(),
 		page.Enable(),
@@ -303,7 +300,13 @@ func (sess *Session) Fetch(ctx context.Context, phs *frontierV1.PageHarvestSpec)
 	fetchStart := time.Now()
 	if err := chromedp.Run(loadCtx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			_, _, _, err := page.Navigate(sess.RequestedUrl.Uri).WithTransitionType(page.TransitionTypeOther).Do(ctx)
+			_, _, errorText, err := page.Navigate(sess.RequestedUrl.Uri).WithTransitionType(page.TransitionTypeOther).Do(ctx)
+			if err != nil {
+				return err
+			}
+			if errorText != "" {
+				return fmt.Errorf("page load error %s", errorText)
+			}
 			return err
 		}),
 	); err != nil {
@@ -316,22 +319,28 @@ func (sess *Session) Fetch(ctx context.Context, phs *frontierV1.PageHarvestSpec)
 		}
 	}
 
+	log.Debug().Msg("Wait for completion")
 	// Give scripts a chance to start by waiting for network activity to slow down
 	_ = sess.netActivityTimer.WaitForCompletion()
 	sess.netActivityTimer.Reset()
 
+	log.Debug().
+		Str("phase", configV1.BrowserScript_ON_NEW_DOCUMENT.String()).Msg("Execute scripts")
 	if err := sess.executeScripts(loadCtx, configV1.BrowserScript_ON_NEW_DOCUMENT); err != nil {
 		log.Warn().
 			Str("phase", configV1.BrowserScript_ON_NEW_DOCUMENT.String()).
 			Err(err).Msg("Failed to execute scripts")
 		return nil, fmt.Errorf("failed executing scripts in %v phase: %w", configV1.BrowserScript_ON_NEW_DOCUMENT, err)
 	}
+	log.Debug().
+		Str("phase", configV1.BrowserScript_ON_LOAD.String()).Msg("Execute scripts")
 	if err := sess.executeScripts(loadCtx, configV1.BrowserScript_ON_LOAD); err != nil {
 		log.Warn().
 			Str("phase", configV1.BrowserScript_ON_LOAD.String()).
 			Err(err).Msg("Failed to execute scripts")
 	}
 
+	log.Debug().Msg("Wait for frames to finish loading")
 	// Wait for frames to finish loading
 	err = sess.frameWg.Wait()
 	switch err {
@@ -344,6 +353,8 @@ func (sess *Session) Fetch(ctx context.Context, phs *frontierV1.PageHarvestSpec)
 			return nil, errors.New(-5004, "Runtime exceeded", "Pageload timed out. Url: "+sess.RequestedUrl.Uri)
 		}
 	}
+
+	log.Debug().Msg("Wait for completion")
 
 	// Wait for all outstanding requests to receive a response
 	err = sess.timer.WaitForCompletion()
@@ -503,7 +514,7 @@ func (sess *Session) extractCookies() []*frontierV1.Cookie {
 
 	if err := chromedp.Run(sess.ctx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			cookies, err := network.GetAllCookies().Do(ctx)
+			cookies, err := network.GetCookies().Do(ctx)
 			if err != nil {
 				return err
 			}

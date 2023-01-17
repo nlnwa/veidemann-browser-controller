@@ -19,6 +19,9 @@ package session
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"time"
+
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -29,8 +32,6 @@ import (
 	"github.com/opentracing/opentracing-go"
 	tracelog "github.com/opentracing/opentracing-go/log"
 	zlog "github.com/rs/zerolog/log"
-	"regexp"
-	"time"
 )
 
 type sessionScripts struct {
@@ -179,6 +180,7 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 		scripts[s.Id] = s
 	}
 	for _, s := range sess.scripts.Get(scriptType) {
+		log.Debug().Str("script", s.Meta.Name).Msg("Execute script")
 		// add initial script to map
 		scripts[s.Id] = s
 		err := script.Run(s.Id, scripts, sess.RequestedUrl.Annotation, execute, wait)
@@ -186,6 +188,7 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 			return fmt.Errorf("failed to run script %s (%s): %w", s.Meta.Name, s.Id, err)
 		}
 	}
+	log.Debug().Msg("Done executing scripts")
 	return nil
 }
 
@@ -243,6 +246,7 @@ func getExecutionContextID(ctx context.Context) (runtime.ExecutionContextID, err
 
 // getFrameTree returns the frame tree of the current page or an error if it fails.
 func getFrameTree(ctx context.Context) (*page.FrameTree, error) {
+	zlog.Debug().Msg("Get frame tree")
 	var frameTree *page.FrameTree
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		var err error
@@ -252,6 +256,7 @@ func getFrameTree(ctx context.Context) (*page.FrameTree, error) {
 	if err != nil {
 		return nil, err
 	}
+	zlog.Debug().Msg("Got frame tree")
 	return frameTree, nil
 }
 

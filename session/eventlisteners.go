@@ -39,8 +39,10 @@ func (sess *Session) listenFunc(ctx context.Context) func(ev interface{}) {
 	log := sess.logger
 	return func(ev interface{}) {
 		switch ev := ev.(type) {
+		case *page.EventLifecycleEvent:
+			log.Debug().Str("event", "lifecycle").Msgf("%v", ev)
 		case *network.EventRequestWillBeSent:
-			log.Trace().Msgf("Request will be sent: %v, %v, %v, %v, %v, %v", ev.RequestID, ev.Type, ev.FrameID, ev.Initiator.Type, ev.LoaderID, ev.DocumentURL)
+			// log.Trace().Msgf("Request will be sent: %v, %v, %v, %v, %v, %v", ev.RequestID, ev.Type, ev.FrameID, ev.Initiator.Type, ev.LoaderID, ev.DocumentURL)
 			if req := sess.Requests.GetByNetworkId(ev.RequestID.String()); req != nil {
 				req.Initiator = ev.Initiator.Type.String()
 			}
