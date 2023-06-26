@@ -4,13 +4,12 @@ go 1.16
 
 require (
 	github.com/HdrHistogram/hdrhistogram-go v1.1.2 // indirect
-	github.com/chromedp/cdproto v0.0.0-20200709115526-d1f6fc58448b
-	github.com/chromedp/chromedp v0.5.4-0.20200417165948-9fff3ea3e94b
+	github.com/chromedp/cdproto v0.0.0-20230220211738-2b1ec77315c9
+	github.com/chromedp/chromedp v0.5.5
 	github.com/docker/go-connections v0.4.0
-	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/google/uuid v1.2.0
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
-	github.com/mailru/easyjson v0.7.2
+	github.com/mailru/easyjson v0.7.7
 	github.com/mitchellh/mapstructure v1.3.3 // indirect
 	github.com/nlnwa/veidemann-api/go v0.0.0-20211008092321-7fbcd3a6ae1a
 	github.com/nlnwa/veidemann-log-service v0.1.6
