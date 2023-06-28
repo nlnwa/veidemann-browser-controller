@@ -1,4 +1,5 @@
-// +build slow
+//go:build integration
+// +build integration
 
 /*
  * Copyright 2020 National Library of Norway.
@@ -21,12 +22,20 @@ package server
 import (
 	"bytes"
 	"context"
+	"flag"
 	"fmt"
+	"io"
+	"net"
+	"os"
+	"testing"
+	"time"
+
 	"github.com/docker/go-connections/nat"
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	frontierV1 "github.com/nlnwa/veidemann-api/go/frontier/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/database"
+	"github.com/nlnwa/veidemann-browser-controller/logger"
 	"github.com/nlnwa/veidemann-browser-controller/logwriter"
 	"github.com/nlnwa/veidemann-browser-controller/screenshotwriter"
 	"github.com/nlnwa/veidemann-browser-controller/serviceconnections"
@@ -36,21 +45,31 @@ import (
 	"github.com/nlnwa/veidemann-recorderproxy/recorderproxy"
 	proxyServiceConnections "github.com/nlnwa/veidemann-recorderproxy/serviceconnections"
 	proxyTestUtil "github.com/nlnwa/veidemann-recorderproxy/testutil"
+	"github.com/sirupsen/logrus"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	r "gopkg.in/rethinkdb/rethinkdb-go.v6"
-	"io"
-	"net"
-	"os"
-	"testing"
-	"time"
 )
 
+// sessions is a registry of sessions
 var sessions *session.Registry
 
+// localhost is the ip address of the host machine
 var localhost = GetOutboundIP().String()
 
+// provider is a flag to select container provider
+var provider = flag.String("provider", "docker", "container provider, \"docker\" or \"podman\".")
+
 func TestMain(m *testing.M) {
+	// Parse flags
+	flag.Parse()
+
+	// Set recorderproxy log level to warn to avoid too much output
+	logrus.SetLevel(logrus.WarnLevel)
+
+	// Set log level
+	logger.InitLog("debug", "logfmt", false)
+
 	// setup browser
 	ctx, cancelBrowser := context.WithCancel(context.Background())
 	defer cancelBrowser()
@@ -182,23 +201,25 @@ func TestSession_Fetch(t *testing.T) {
 	for _, tt := range tests {
 		ctx := context.Background()
 		t.Run(tt.name, func(t *testing.T) {
+			// Get next available session
 			s, err := sessions.GetNextAvailable(ctx)
 			if err != nil {
 				t.Error(err)
 			}
-			phs := &frontierV1.PageHarvestSpec{
+			defer sessions.Release(s)
+
+			// Fetch page
+			result, err := s.Fetch(context.Background(), &frontierV1.PageHarvestSpec{
 				QueuedUri:    tt.url,
 				CrawlConfig:  conf,
 				SessionToken: "test",
-			}
-			result, err := s.Fetch(context.Background(), phs)
+			})
 			if err != nil {
 				t.Error(err)
 			} else {
 				t.Logf("Resource count: %v, Time: %v\n", result.UriCount, result.PageFetchTimeMs)
 			}
-			sessions.Release(s)
-			//time.Sleep(time.Second*4)
+			time.Sleep(time.Second * 4)
 		})
 	}
 }
@@ -235,33 +256,35 @@ func setupDbMock() *database.MockConnection {
 			},
 			"browserScript": map[string]interface{}{
 				"browserScriptType": "EXTRACT_OUTLINKS",
-				"script": `    (function extractOutlinks(frame) {
-      const framesDone = new Set();
-      function isValid(link) {
-      return (link != null
-            && link.attributes.href.value != ""
-            && link.attributes.href.value != "#"
-            && link.protocol != "tel:"
-            && link.protocol != "mailto:"
-           );
-      }
-      function compileOutlinks(frame) {
-        framesDone.add(frame);
-        if (frame && frame.document) {
-          let outlinks = Array.from(frame.document.links);
-          for (var i = 0; i < frame.frames.length; i++) {
-            if (frame.frames[i] && !framesDone.has(frame.frames[i])) {
-              try {
-                outlinks = outlinks.concat(compileOutlinks(frame.frames[i]));
-              } catch {}
-            }
-          }
-          return outlinks;
-        }
-        return [];
-      }
-      return Array.from(new Set(compileOutlinks(frame).filter(isValid).map(_ => _.href)));
-    })(window);`,
+				"script": `
+(function extractOutlinks(frame) {
+   const framesDone = new Set();
+   function isValid(link) {
+   return (link != null
+		 && link.attributes.href.value != ""
+		 && link.attributes.href.value != "#"
+		 && link.protocol != "tel:"
+		 && link.protocol != "mailto:"
+		);
+   }
+   function compileOutlinks(frame) {
+	 framesDone.add(frame);
+	 if (frame && frame.document) {
+	   let outlinks = Array.from(frame.document.links);
+	   for (var i = 0; i < frame.frames.length; i++) {
+		 if (frame.frames[i] && !framesDone.has(frame.frames[i])) {
+		   try {
+			 outlinks = outlinks.concat(compileOutlinks(frame.frames[i]));
+		   } catch {}
+		 }
+	   }
+	   return outlinks;
+	 }
+	 return [];
+   }
+   return Array.from(new Set(compileOutlinks(frame).filter(isValid).map(_ => _.href)));
+ })(window);
+`,
 			},
 		},
 		nil,
@@ -290,7 +313,7 @@ func localRecorderProxy(id int, conn *proxyServiceConnections.Connections, nextP
 	return
 }
 
-// Get preferred outbound ip of this machine
+// GetOutboundIP returrns the preferred outbound ip of this machine
 func GetOutboundIP() net.IP {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
@@ -305,11 +328,26 @@ func GetOutboundIP() net.IP {
 }
 
 func setupBrowser(ctx context.Context) (host string, port int, err error) {
+	// Determine container provider
+	skipReaper := false
+	var providerType testcontainers.ProviderType
+	if *provider == "podman" {
+		providerType = testcontainers.ProviderPodman
+		skipReaper = true
+	} else {
+		providerType = testcontainers.ProviderDocker
+	}
+	// Start browserless container
 	browserless, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ProviderType: providerType,
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "browserless/chrome:1.33.0-puppeteer-3.0.0",
+			SkipReaper: skipReaper,
+			Env: map[string]string{
+				"DEBUG": "*",
+			},
+			Image:        "browserless/chrome:1.33.1-puppeteer-3.0.0",
 			ExposedPorts: []string{"3000/tcp"},
-			WaitingFor: wait.ForListeningPort("3000/tcp"),
+			WaitingFor:   wait.ForListeningPort("3000/tcp"),
 		},
 		Started: true,
 	})

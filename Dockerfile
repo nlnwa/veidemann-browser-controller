@@ -1,4 +1,4 @@
-FROM golang:1.17 as build
+FROM golang:1.19 as build
 
 WORKDIR /build
 
@@ -15,7 +15,7 @@ COPY . .
 #   -w disable DWARF generation
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" .
 
-FROM gcr.io/distroless/base
+FROM gcr.io/distroless/base-debian11
 COPY --from=build /build/veidemann-browser-controller /
 
 # api server

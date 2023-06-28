@@ -18,6 +18,7 @@ package robotsevaluator
 
 import (
 	"context"
+
 	configV1 "github.com/nlnwa/veidemann-api/go/config/v1"
 	robotsevaluatorV1 "github.com/nlnwa/veidemann-api/go/robotsevaluator/v1"
 	"github.com/nlnwa/veidemann-browser-controller/serviceconnections"
@@ -71,16 +72,12 @@ func resolvePolicy(politenessConfig *configV1.ConfigObject) (resolvedPoliteness 
 	switch politenessConfig.GetPolitenessConfig().GetRobotsPolicy() {
 	case configV1.PolitenessConfig_OBEY_ROBOTS_CLASSIC:
 		resolvedPolicy = configV1.PolitenessConfig_OBEY_ROBOTS
-		break
 	case configV1.PolitenessConfig_CUSTOM_ROBOTS_CLASSIC:
 		resolvedPolicy = configV1.PolitenessConfig_CUSTOM_ROBOTS
-		break
 	case configV1.PolitenessConfig_CUSTOM_IF_MISSING_CLASSIC:
 		resolvedPolicy = configV1.PolitenessConfig_CUSTOM_IF_MISSING
-		break
 	default:
 		resolvedPolicy = configV1.PolitenessConfig_IGNORE_ROBOTS
-		break
 	}
 
 	resolvedPoliteness = proto.Clone(politenessConfig).(*configV1.ConfigObject)
