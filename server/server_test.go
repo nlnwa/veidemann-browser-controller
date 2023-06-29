@@ -345,7 +345,7 @@ func setupBrowser(ctx context.Context) (host string, port int, err error) {
 			Env: map[string]string{
 				"DEBUG": "*",
 			},
-			Image:        "browserless/chrome:1.33.1-puppeteer-3.0.0",
+			Image:        "browserless/chrome:1.36.0-puppeteer-3.3.0",
 			ExposedPorts: []string{"3000/tcp"},
 			WaitingFor:   wait.ForListeningPort("3000/tcp"),
 		},
