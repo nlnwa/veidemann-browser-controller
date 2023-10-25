@@ -10,7 +10,7 @@ require (
 	github.com/chromedp/chromedp v0.5.5
 	github.com/containerd/containerd v1.7.2 // indirect
 	github.com/docker/distribution v2.8.2+incompatible // indirect
-	github.com/docker/docker v24.0.2+incompatible
+	github.com/docker/docker v24.0.2+incompatible // indirect
 	github.com/docker/go-connections v0.4.0
 	github.com/google/uuid v1.3.0
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
@@ -30,7 +30,7 @@ require (
 	github.com/prometheus/common v0.39.0
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/rs/zerolog v1.28.0
-	github.com/sirupsen/logrus v1.9.3 // indirect
+	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/afero v1.9.3 // indirect
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.14.0
@@ -38,7 +38,7 @@ require (
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
 	golang.org/x/tools v0.10.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20230530153820-e85fd2cbaebc // indirect
-	google.golang.org/grpc v1.56.1
+	google.golang.org/grpc v1.56.3
 	google.golang.org/protobuf v1.31.0
 	gopkg.in/rethinkdb/rethinkdb-go.v6 v6.2.2
 	gotest.tools/v3 v3.4.0 // indirect
