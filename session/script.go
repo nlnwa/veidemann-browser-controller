@@ -19,6 +19,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"strings"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -198,6 +199,10 @@ func (sess *Session) executeScripts(ctx context.Context, scriptType configV1.Bro
 // Returns an error: if the debug protocol action fails, if script execution
 // caused an exception, or if unmarshalling of result value fails.
 func callScript(ctx context.Context, eci runtime.ExecutionContextID, functionDeclaration string, arguments easyjson.RawMessage) (easyjson.RawMessage, error) {
+	var awaitPromise bool
+	if strings.HasPrefix(functionDeclaration, "async ") {
+		awaitPromise = true
+	}
 	var res *runtime.RemoteObject
 	var exceptionDetails *runtime.ExceptionDetails
 	err := chromedp.Run(ctx,
@@ -207,6 +212,7 @@ func callScript(ctx context.Context, eci runtime.ExecutionContextID, functionDec
 				WithArguments([]*runtime.CallArgument{{Value: arguments}}).
 				WithExecutionContextID(eci).
 				WithReturnByValue(true).
+				WithAwaitPromise(awaitPromise).
 				Do(ctx)
 			return err
 		}),

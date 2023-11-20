@@ -589,12 +589,19 @@ func (sess *Session) extractOutlinks() []string {
 			Str("scriptId", s.GetId()).
 			Logger()
 
+		script := s.GetBrowserScript().GetScript()
+		var awaitPromise bool
+		if strings.HasPrefix(script, "(async ") {
+			awaitPromise = true
+		}
 		var res *runtime.RemoteObject
 		var exceptionDetails *runtime.ExceptionDetails
 		err := chromedp.Run(sess.ctx,
 			chromedp.ActionFunc(func(ctx context.Context) (err error) {
-				res, exceptionDetails, err = runtime.Evaluate(s.GetBrowserScript().GetScript()).
-					WithReturnByValue(true).Do(ctx)
+				res, exceptionDetails, err = runtime.Evaluate(script).
+					WithReturnByValue(true).
+					WithAwaitPromise(awaitPromise).
+					Do(ctx)
 				return err
 			}),
 		)
