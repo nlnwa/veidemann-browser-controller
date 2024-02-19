@@ -5,10 +5,9 @@ go 1.16
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
 	github.com/bits-and-blooms/bitset v1.4.0 // indirect
-	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/chromedp/cdproto v0.0.0-20201009231348-1c6a710e77de
 	github.com/chromedp/chromedp v0.5.5
-	github.com/containerd/containerd v1.7.2 // indirect
+	github.com/containerd/containerd v1.7.11 // indirect
 	github.com/docker/distribution v2.8.2+incompatible // indirect
 	github.com/docker/docker v24.0.7+incompatible // indirect
 	github.com/docker/go-connections v0.4.0
@@ -16,7 +15,6 @@ require (
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
 	github.com/klauspost/compress v1.16.6 // indirect
 	github.com/mailru/easyjson v0.7.7
-	github.com/mattn/go-isatty v0.0.17 // indirect
 	github.com/moby/term v0.5.0 // indirect
 	github.com/nlnwa/veidemann-api/go v0.0.0-20220110104816-ea13deeb9671
 	github.com/nlnwa/veidemann-log-service v0.2.0
@@ -36,12 +34,9 @@ require (
 	github.com/spf13/viper v1.14.0
 	github.com/testcontainers/testcontainers-go v0.19.0
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
-	golang.org/x/tools v0.10.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20230530153820-e85fd2cbaebc // indirect
-	google.golang.org/grpc v1.56.3
+	google.golang.org/grpc v1.58.3
 	google.golang.org/protobuf v1.31.0
 	gopkg.in/rethinkdb/rethinkdb-go.v6 v6.2.2
-	gotest.tools/v3 v3.4.0 // indirect
 )
 
 //replace github.com/getlantern/proxy => ../getlantern-proxy
