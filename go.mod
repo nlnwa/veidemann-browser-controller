@@ -23,7 +23,7 @@ require (
 	github.com/nlnwa/veidemann-recorderproxy v0.3.0
 	github.com/nlnwa/whatwg-url v0.1.2
 	github.com/opencontainers/image-spec v1.1.0-rc3 // indirect
-	github.com/opencontainers/runc v1.1.7 // indirect
+	github.com/opencontainers/runc v1.1.12 // indirect
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/pelletier/go-toml/v2 v2.0.6 // indirect
 	github.com/prometheus/client_golang v1.14.0
